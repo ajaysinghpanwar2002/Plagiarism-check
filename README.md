@@ -205,7 +205,7 @@ Flag for Review ← Hamming Distance < Threshold ← Get Candidate Hashes
 
 ### Core Implementation
 
-- [ ] Containerize application using Docker
+- [X] Containerize application using Docker
 - [ ] Implement Athena client interface for Pratilipi ID fetching
 - [ ] Develop S3 client for story content download
 - [ ] Create HTML to text parser
