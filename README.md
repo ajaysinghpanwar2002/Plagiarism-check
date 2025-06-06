@@ -1,174 +1,227 @@
-# Plagiarism Detection Service
+# Plagiarism Detection System
 
-This repository powers a **plagiarism detection system** built for a **multilingual content platform**. It efficiently detects near-duplicate stories across millions of documents using **SimHash** and **Locality-Sensitive Hashing (LSH)**. The system is optimized for scale and cost-efficiency while operating on minimal resources.
+## Overview
 
----
+A Go-based plagiarism detection system that uses SimHash algorithm and Locality-Sensitive Hashing (LSH) to identify duplicate content in stories. The system processes approximately 10,000 new documents daily from a corpus of 15+ million existing stories across multiple languages.
 
-## 📈 Scale of Data
+## System Architecture
 
-* **Total Stories in S3**: \~15.8 million
+### Core Components
 
-* **Per Language Breakdown**:
+1. **Athena Client Interface** - Fetches Pratilipi IDs for stories published/updated in the last 24 hours
+2. **S3 Client Interface** - Downloads story content from S3 buckets
+3. **Content Parser** - Converts HTML content to plain text
+4. **SimHash Generator** - Creates 128-bit SimHash fingerprints
+5. **Redis Client** - Stores and retrieves SimHashes using LSH bucketing
+6. **HTTP Layer** - Sends flagged stories to CMS for manual review
+7. **Monitoring Stack** - Prometheus metrics with Grafana dashboards
+8. **Notification System** - Slack webhook integration for failure alerts
 
-  | Language  | Story Count |
-  | --------- | ----------- |
-  | Hindi     | 4,169,351   |
-  | Bengali   | 1,852,634   |
-  | Marathi   | 1,851,468   |
-  | Tamil     | 1,817,685   |
-  | Malayalam | 2,055,712   |
-  | Telugu    | 1,536,833   |
-  | Gujarati  | 1,124,591   |
-  | Odia      | 405,674     |
-  | Punjabi   | 270,427     |
-  | English   | 712,591     |
-
-* **New Documents per Day**: \~10,000
-
----
-
-## ⚙️ Resources
-
-* **EC2 Instance (Daily Processing)**:
-
-  * vCPUs: 2
-  * Memory: 8 GiB (4 GiB per vCPU)
-* **Redis DB**: Used for SimHash storage and fast LSH-based similarity lookups
-
----
-
-## 🏗️ System Architecture
+### Producer-Consumer Architecture
 
 ```
-Data Ingestion (Athena + S3)
-           ↓
-     Processing Core (Go)
-           ↓
-     State Cache (Redis)
-           ↓
-      Outputs (Flagged IDs, Monitoring)
+[Athena] → [ID Producer] → [ID Channel] → [Worker Pool] → [Batch Channel] → [Redis Writer]
+    ↓           (1)            ↓           (10-50)          ↓              (1)
+[S3 Bucket] ←─────────────────────────────┘               └─────────────→ [Redis LSH]
 ```
 
-### 1. Data Ingestion
+**Flow Description:**
+- **ID Producer (1 Goroutine)**: Fetches Pratilipi IDs from Athena and feeds them into a buffered channel
+- **Worker Pool (10-50 Goroutines)**: Processes IDs concurrently by downloading from S3, parsing content, generating SimHash, and preparing Redis batches
+- **Redis Writer (1 Goroutine)**: Handles bulk writes to Redis to prevent connection overload
 
-* **Two Modes**:
+## Locality-Sensitive Hashing (LSH) Implementation
 
-  * **Initial SimHash DB Build** (\~15M stories)
-  * **Daily Incremental Processing** (\~10K new stories)
-* **Strategy**: Efficient parallel processing using a **Producer-Consumer Model**
+### Bucketing Strategy
 
-### 2. Processing Core
+The 128-bit SimHash is divided into 8 bands of 16 bits each for efficient similarity detection:
 
-* Written in **Go**
-* Responsibilities:
+```
+128-bit SimHash: [16 bits][16 bits][16 bits][16 bits][16 bits][16 bits][16 bits][16 bits]
+                    Band 0   Band 1   Band 2   Band 3   Band 4   Band 5   Band 6   Band 7
+```
 
-  * Download story HTML from S3
-  * Convert HTML to plain text
-  * Generate 128-bit SimHash
-  * Batch insert into Redis
+### Redis Storage Structure
 
-### 3. Redis State Cache
+**Bucket Storage (Redis Sets):**
+```
+Key Pattern: {LANGUAGE}:{BAND_INDEX}:{BAND_VALUE}
+Example: SADD HINDI:0:A8D3 12345
+         SADD HINDI:1:FF01 12345
+```
 
-* SimHashes stored for efficient lookup and comparison
-* Uses **Locality-Sensitive Hashing (LSH)** over SimHash
-* Memory-efficient (\~240 MB for 15M SimHashes)
+**Full Hash Storage (Redis Hash):**
+```
+Key Pattern: simhashes:{LANGUAGE}
+Example: HSET simhashes:HINDI 12345 <full_128_bit_hash_hex>
+```
 
-### 4. Outputs
+### Duplicate Detection Process
 
-* **Flagged IDs**: Sent for manual review
-* **Monitoring**: Metrics exported to a **Grafana dashboard**
+```
+New Story → Generate SimHash → Split into 8 Bands → Query LSH Buckets
+    ↓                                                        ↓
+Flag for Review ← Hamming Distance < Threshold ← Get Candidate Hashes
+```
 
----
+1. Generate 128-bit SimHash for new story
+2. Split into 8 bands of 16 bits each
+3. Query Redis using `SUNION` on corresponding bucket keys
+4. Retrieve full hashes for candidate matches
+5. Calculate Hamming distance between new hash and candidates
+6. Flag as potential plagiarism if distance ≤ threshold
 
-## 🔄 Processing Pipeline (Producer-Consumer Model)
+## Daily Processing Workflow
 
-* **ID Producer (1 Goroutine)**:
-  Queries Athena and pushes story IDs to a channel.
+### Data Processing Pipeline
 
-* **Worker Pool (10–50 Goroutines)**:
-  Each worker:
+```
+[Athena Query] → [Content Removal] → [S3 Download] → [HTML Parsing] → [SimHash Generation]
+      ↓               ↓                   ↓              ↓                ↓
+[24h Stories]   [Updated Content]   [Story Content]  [Plain Text]   [128-bit Hash]
+      ↓               ↓                                                    ↓
+[New: ~10k]     [Updated: ~15k]                                    [LSH Comparison]
+                                                                          ↓
+                                                               [Store or Flag for Review]
+```
 
-  * Downloads story from S3
-  * Parses and extracts text
-  * Generates SimHash
-  * Batches for Redis
-  * Cleans up local files
+### Processing Steps
 
-* **Redis Writer (1 Goroutine)**:
-  Pulls batches from worker channel and inserts into Redis using pipelining.
+1. **Data Identification**
+   - Fetch newly published stories (last 24 hours) from Athena
+   - Identify stories with updated content or state changes
 
----
+2. **Content Cleanup**
+   - Remove SimHashes for updated/unpublished stories from Redis
 
-## 🧠 Locality-Sensitive Hashing (LSH)
+3. **Content Processing**
+   - Download story content from S3 (~25k stories total)
+   - Parse HTML content to extract plain text
 
-### 128-bit SimHash Bucketing
+4. **Similarity Detection**
+   - Generate SimHash for new stories
+   - Compare against existing hashes using LSH buckets
+   - Flag potential plagiarism cases
 
-1. **Split Hash**: 8 bands of 16 bits each
-   Example:
+5. **Storage and Review**
+   - Store unique SimHashes in Redis
+   - Send flagged stories to CMS for manual review
 
-   ```
-   [16b][16b][16b][16b][16b][16b][16b][16b]
-   ```
+## Technical Specifications
 
-2. **Store Buckets in Redis**:
-   For each band, store the `pratilipi_id` in a Redis Set with the key:
+### Data Scale
 
-   ```
-   <LANG>:<BAND_INDEX>:<BAND_VALUE>
-   ```
+| Language   | Story Count |
+|------------|-------------|
+| Hindi      | 4,169,351   |
+| Bengali    | 1,852,634   |
+| Marathi    | 1,851,468   |
+| Tamil      | 1,817,685   |
+| Telugu     | 1,536,833   |
+| Malayalam  | 2,055,712   |
+| Gujarati   | 1,124,591   |
+| English    | 712,591     |
+| Odia       | 405,674     |
+| Punjabi    | 270,427     |
+| **Total**  | **15,796,966** |
 
-   Example (Hindi, ID = 12345):
+**Daily Volume:** ~10,000 new documents across all languages
 
-   ```
-   SADD HINDI:0:A8D3 12345
-   SADD HINDI:1:FF01 12345
-   ...
-   ```
+### Infrastructure Requirements
 
-3. **Store Full Hash**:
+**Development Environment:**
+- EC2 Instance: 2 vCPUs, 8 GiB RAM
+- Single instance deployment for daily processing
 
-   ```
-   HSET simhashes:<LANG> <PRATILIPI_ID> <128_BIT_HASH_AS_HEX>
-   ```
+### Memory Footprint Estimation
 
----
+**Redis Memory Usage:**
+- Full Hashes Storage: ~400 MB
+- LSH Buckets Storage: ~1.6 GB + overhead
+- **Total Estimated: 2.5 - 3.5 GB**
 
-## 🔍 Duplicate Detection (Daily Flow)
+### Performance Estimates
 
-1. Generate SimHash for new story
-2. Split into 8 bands
-3. Query Redis:
+**Daily Job Execution Time:**
+- Athena Query: ~1.5 minutes
+- S3 Download & Processing: ~4 minutes
+- **Total Estimated: 5-6 minutes**
 
-   ```
-   SUNION HINDI:0:<band_0> HINDI:1:<band_1> ... HINDI:7:<band_7>
-   ```
-4. Fetch full SimHashes of candidate IDs
-5. Calculate **Hamming Distance** with the new SimHash
-6. If distance ≤ 3 → **Flag as near-duplicate**
+**Per Document Processing:**
+- S3 Download: 50-100 ms
+- HTML Parsing & SimHash: <5 ms
+- Redis Operations: 15-20 ms
+- **Total Average: 70-125 ms per document**
 
----
+## Configuration and Flexibility
 
-## 📊 Monitoring
+### Configurable Parameters
 
-* Real-time metrics tracked via **Grafana**
-* Includes:
+- **Hamming Distance Threshold**: Per-language configuration for plagiarism detection sensitivity
+- **Worker Pool Size**: Adjustable based on system resources
+- **Batch Sizes**: Configurable for Redis bulk operations
+- **Retry Policies**: Configurable retry attempts and backoff strategies
 
-  * Total stories processed
-  * Daily flag rate
-  * Latency per stage
-  * Memory usage
+### Error Handling and Reliability
 
----
+- **Checkpointing**: Track last processed Pratilipi ID and timestamp in Redis
+- **Fail-Fast Strategy**: Immediate failure detection with retry mechanisms
+- **Stateless Design**: No persistent application state
+- **Comprehensive Logging**: Detailed error logging and metrics collection
 
-## ✅ Summary
+## Monitoring and Observability
 
-| Component        | Description                                  |
-| ---------------- | -------------------------------------------- |
-| SimHash          | Compact fingerprint of a story (128-bit)     |
-| Redis Sets       | Buckets for LSH band-wise indexing           |
-| Redis Hashes     | Full SimHash storage for final comparison    |
-| Hamming Distance | Used to determine near-duplicate threshold   |
-| Parallel Design  | High-throughput, low-memory efficient system |
+### Metrics Collection
 
----
+- **Prometheus Integration**: Custom metrics for processing rates, error counts, and performance
+- **Grafana Dashboard**: Detailed visualization of system performance and health
+- **Slack Notifications**: Webhook-based failure alerts
 
+### Key Metrics
+
+- Documents processed per minute
+- SimHash generation rate
+- Redis operation latency
+- Plagiarism detection accuracy
+- System resource utilization
+
+## Future Enhancements
+
+### Planned Features
+
+1. **Algorithm Flexibility**
+   - Support for additional plagiarism detection algorithms
+   - Algorithm selection based on content characteristics
+
+2. **Advanced Validation**
+   - Multi-algorithm verification before CMS submission
+   - Confidence scoring for plagiarism detection
+
+3. **Content Analysis**
+   - Enhanced preprocessing for different content types
+   - Language-specific optimizations
+
+## Development Tasks
+
+### Core Implementation
+
+- [ ] Containerize application using Docker
+- [ ] Implement Athena client interface for Pratilipi ID fetching
+- [ ] Develop S3 client for story content download
+- [ ] Create HTML to text parser
+- [ ] Implement 128-bit SimHash algorithm in Go
+- [ ] Build Producer-Consumer model with goroutines
+- [ ] Develop Redis client with LSH bucketing support
+- [ ] Implement Hamming distance calculation for 128-bit SimHashes
+- [ ] Create HTTP layer for CMS integration
+- [ ] Set up Prometheus metrics and Grafana dashboards
+- [ ] Implement Slack webhook notifications
+
+### Additional Tasks
+
+- [ ] Performance benchmarking and optimization
+- [ ] One-time SimHash generation for existing 15M stories
+- [ ] Sanity check implementation for existing story corpus
+- [ ] Comprehensive error handling and retry mechanisms
+- [ ] Configuration management system
+- [ ] Documentation and deployment guides
