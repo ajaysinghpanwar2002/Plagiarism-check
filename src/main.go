@@ -6,11 +6,12 @@ import (
 	"log"
 	"sync"
 
-	"plagiarism-detector/sources"
+	Config "plagiarism-detector/src/config"
+	"plagiarism-detector/src/sources"
 )
 
 func main() {
-	config, err := LoadConfig()
+	config, err := Config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
