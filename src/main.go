@@ -7,6 +7,7 @@ import (
 	"sync"
 
 	"plagiarism-detector/src/config"
+	"plagiarism-detector/src/simhash"
 	"plagiarism-detector/src/sources"
 )
 
@@ -28,6 +29,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Athena processor: %v", err)
 	}
+
 	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket)
 	if err != nil {
 		log.Fatalf("Failed to create S3 downloader: %v", err)
@@ -47,12 +49,20 @@ func main() {
 					log.Printf("Worker %d: ERROR downloading and parsing content for Pratilipi ID %s: %v", workerID, id, err)
 					continue
 				}
+
 				if content == "" {
 					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download/parse)", workerID, id)
 					continue
 				}
 
-				// The content is now clean text, ready for SimHash generation.
+				// Generate the 128-bit SimHash for the content.
+				// The return type is now simhash.Simhash
+				hash := simhash.New(content)
+
+				// The .String() method to get the hex representation
+				log.Printf("Worker %d: Generated SimHash for Pratilipi ID %s: %s", workerID, id, hash.String())
+
+				// The simash value is generated
 				log.Printf("Worker %d: Successfully parsed content for Pratilipi ID %s. Clean text length: %d", workerID, id, len(content))
 			}
 		}(i)
