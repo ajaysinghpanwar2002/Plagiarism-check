@@ -162,7 +162,7 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDsForYesterday(ctx context.Con
 	yesterdayStartStr := yesterday.Format("2006-01-02 15:04:05") 
 	todayStartStr := today.Format("2006-01-02 15:04:05")
 
-	queryFormat := "SELECT pratilipi_id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))"
+	queryFormat := "SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))"
 	query := fmt.Sprintf(queryFormat, language, yesterdayStartStr, todayStartStr)
 
 	log.Printf("Executing query: %s", query)
