@@ -3,6 +3,7 @@ package storage
 import (
 	"context"
 	"fmt"
+	"log"
 	"strings"
 
 	"plagiarism-detector/src/simhash"
@@ -11,9 +12,10 @@ import (
 )
 
 const (
-	numBands    = 8
-	bandBitSize = 16
-	bandMask    = uint64(1<<bandBitSize) - 1
+	numBands                 = 8
+	bandBitSize              = 16
+	bandMask                 = uint64(1<<bandBitSize) - 1
+	hammingDistanceThreshold = 3
 )
 
 type RedisClient struct {
@@ -34,7 +36,8 @@ func NewRedisClient(ctx context.Context, addr, password string, db int) (*RedisC
 	return &RedisClient{client: rdb}, nil
 }
 
-func (rc *RedisClient) StoreSimhash(ctx context.Context, pratilipiID, language string, hash simhash.Simhash) error {
+// It performs the actual storage of the simhash and its bands
+func (rc *RedisClient) storeSimhashInternal(ctx context.Context, pratilipiID, language string, hash simhash.Simhash) error {
 	pipe := rc.client.Pipeline()
 
 	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
@@ -58,7 +61,68 @@ func (rc *RedisClient) StoreSimhash(ctx context.Context, pratilipiID, language s
 	if err != nil {
 		return fmt.Errorf("failed to execute Redis pipeline for storing simhash for ID %s: %w", pratilipiID, err)
 	}
+	log.Printf("Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", pratilipiID, language)
 	return nil
+}
+
+func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, language string, newHash simhash.Simhash) (bool, error) {
+	bucketKeys := make([]string, numBands)
+	if numBands > 0 {
+		for i := 0; i < numBands; i++ {
+			var bandValue uint64
+			if i < numBands/2 {
+				shift := uint(i * bandBitSize)
+				bandValue = (newHash.Low >> shift) & bandMask
+			} else {
+				shift := uint((i - numBands/2) * bandBitSize)
+				bandValue = (newHash.High >> shift) & bandMask
+			}
+			bucketKeys[i] = fmt.Sprintf("%s:%d:%x", strings.ToUpper(language), i, bandValue)
+		}
+	}
+
+	var candidateIDs []string
+	var err error
+	if len(bucketKeys) > 0 {
+		candidateIDs, err = rc.client.SUnion(ctx, bucketKeys...).Result()
+		if err != nil {
+			return false, fmt.Errorf("failed to get candidate IDs using SUnion for %s: %w", pratilipiID, err)
+		}
+	}
+
+	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
+
+	for _, candidateID := range candidateIDs {
+		if candidateID == pratilipiID {
+			continue
+		}
+
+		candidateHashStr, err := rc.client.HGet(ctx, fullHashKey, candidateID).Result()
+		if err == redis.Nil {
+			log.Printf("WARN: Candidate ID %s found in LSH bucket but not in full hash map %s. Skipping.", candidateID, fullHashKey)
+			continue
+		}
+		if err != nil {
+			log.Printf("WARN: Failed to get full hash for candidate ID %s from %s: %v. Skipping.", candidateID, fullHashKey, err)
+			continue
+		}
+
+		candidateHash, err := simhash.ParseSimhashFromString(candidateHashStr)
+		if err != nil {
+			log.Printf("WARN: Failed to parse Simhash string '%s' for candidate ID %s: %v. Skipping.", candidateHashStr, candidateID, err)
+			continue
+		}
+
+		distance := simhash.HammingDistance(newHash, candidateHash)
+
+		if distance <= hammingDistanceThreshold {
+			log.Printf("Potential plagiarism DETECTED for Pratilipi ID %s (lang: %s). Similar to %s. Hamming Distance: %d",
+				pratilipiID, language, candidateID, distance)
+			return true, nil // Plagiarism detected
+		}
+	}
+
+	return false, rc.storeSimhashInternal(ctx, pratilipiID, language, newHash)
 }
 
 func (rc *RedisClient) Close() error {

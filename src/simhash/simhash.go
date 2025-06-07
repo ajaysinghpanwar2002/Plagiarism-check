@@ -65,3 +65,26 @@ func (s Simhash) String() string {
 	return fmt.Sprintf("%016x%016x", s.High, s.Low)
 }
 
+func HammingDistance(s1, s2 Simhash) int {
+	popCount := func(n uint64) int {
+		count := 0
+		for n > 0 {
+			n &= (n - 1) // Brian Kernighan's algorithm to count set bits
+			count++
+		}
+		return count
+	}
+	return popCount(s1.Low^s2.Low) + popCount(s1.High^s2.High)
+}
+
+func ParseSimhashFromString(s string) (Simhash, error) {
+	var sh Simhash
+	if len(s) != 32 {
+		return sh, fmt.Errorf("invalid simhash string length: expected 32, got %d", len(s))
+	}
+	_, err := fmt.Sscanf(s, "%016x%016x", &sh.High, &sh.Low)
+	if err != nil {
+		return sh, fmt.Errorf("failed to parse simhash string: %w", err)
+	}
+	return sh, nil
+}

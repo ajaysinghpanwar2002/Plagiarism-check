@@ -68,11 +68,12 @@ func main() {
 
 				hash := simhash.New(content)
 
-				err = redisClient.StoreSimhash(ctx, task.ID, task.Language, hash)
+				plagiarismDetected, err := redisClient.CheckAndStoreSimhash(ctx, task.ID, task.Language, hash)
 				if err != nil {
-					log.Printf("Worker %d: ERROR storing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
-				} else {
-					log.Printf("Worker %d: Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", workerID, task.ID, task.Language)
+					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
+				} else if plagiarismDetected {
+					log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
+					// Here we would typically flag it for review.
 				}
 			}
 		}(i)
