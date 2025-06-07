@@ -15,6 +15,9 @@ type Config struct {
 	Languages           []string
 	NumWorkers          int
 	StoryS3Bucket       string
+	RedisAddr           string
+	RedisPassword       string
+	RedisDB             int
 }
 
 func LoadConfig() (*Config, error) {
@@ -30,11 +33,14 @@ func LoadConfig() (*Config, error) {
 		StoryS3Bucket:       os.Getenv("STORY_S3_BUCKET"),
 		Languages:           []string{"HINDI", "ENGLISH", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
 		NumWorkers:          10,
+		RedisAddr:           os.Getenv("REDIS_ADDR"),
+		RedisPassword:       os.Getenv("REDIS_PASSWORD"),
+		RedisDB:             0,
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||
-		config.AthenaOutputPrefix == "" || config.AWSRegion == "" {
-		return nil, fmt.Errorf("missing required environment variables")
+		config.AthenaOutputPrefix == "" || config.AWSRegion == "" || config.RedisAddr == "" {
+		return nil, fmt.Errorf("missing required environment variables for AWS or Redis")
 	}
 
 	return config, nil

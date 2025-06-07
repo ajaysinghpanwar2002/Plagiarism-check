@@ -9,6 +9,7 @@ import (
 	"plagiarism-detector/src/config"
 	"plagiarism-detector/src/simhash"
 	"plagiarism-detector/src/sources"
+	"plagiarism-detector/src/storage"
 )
 
 func main() {
@@ -35,6 +36,12 @@ func main() {
 		log.Fatalf("Failed to create S3 downloader: %v", err)
 	}
 
+	redisClient, err := storage.NewRedisClient(ctx, config.RedisAddr, config.RedisPassword, config.RedisDB)
+	if err != nil {
+		log.Fatalf("Failed to create Redis client: %v", err)
+	}
+	defer redisClient.Close()
+
 	pratilipiIDChannel := make(chan string, 100)
 	var wg sync.WaitGroup
 
@@ -55,14 +62,26 @@ func main() {
 					continue
 				}
 
-				// Generate the 128-bit SimHash for the content.
-				// The return type is now simhash.Simhash
 				hash := simhash.New(content)
-
 				// The .String() method to get the hex representation
 				log.Printf("Worker %d: Generated SimHash for Pratilipi ID %s: %s", workerID, id, hash.String())
+				// Store the SimHash in Redis
+				// For now, we assume the language is part of the ID or can be derived.
+				// Let's use a placeholder "UNKNOWN" for language or extract it if possible.
+				// The Athena query fetches by language, so we should pass that along.
+				// This part needs refinement on how language is passed to the worker.
+				// For now, let's assume we can get it.
+				// We will need to modify the channel to send a struct with ID and Language.
 
-				// The simash value is generated
+				// For now, let's hardcode a language for testing.
+				// This will be addressed when we refine the producer-consumer data flow.
+				language := "UNKNOWN" // Placeholder - to be fixed
+				err = redisClient.StoreSimhash(ctx, id, language, hash)
+				if err != nil {
+					log.Printf("Worker %d: ERROR storing SimHash for Pratilipi ID %s: %v", workerID, id, err)
+				} else {
+					log.Printf("Worker %d: Successfully stored SimHash for Pratilipi ID %s in Redis", workerID, id)
+				}
 				log.Printf("Worker %d: Successfully parsed content for Pratilipi ID %s. Clean text length: %d", workerID, id, len(content))
 			}
 		}(i)
