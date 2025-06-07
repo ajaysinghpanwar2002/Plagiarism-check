@@ -4,8 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
-	"plagiarism-detector/sources"
 	"sync"
+
+	"plagiarism-detector/sources"
 )
 
 func main() {
@@ -26,6 +27,10 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Athena processor: %v", err)
 	}
+	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket)
+	if err != nil {
+		log.Fatalf("Failed to create S3 downloader: %v", err)
+	}
 
 	pratilipiIDChannel := make(chan string, 100)
 	var wg sync.WaitGroup
@@ -35,9 +40,19 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for id := range pratilipiIDChannel {
-				// For now, the worker just logs the ID.
-				// Later, it will download from S3, generate a SimHash, etc.
 				log.Printf("Worker %d: Processing Pratilipi ID %s", workerID, id)
+				content, err := s3Downloader.DownloadStoryContent(ctx, id)
+				if err != nil {
+					log.Printf("Worker %d: ERROR downloading content for Pratilipi ID %s: %v", workerID, id, err)
+					continue
+				}
+				if content == "" {
+					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download)", workerID, id)
+					continue
+				}
+				// For now, just log the length of the content.
+				// Later, this content will be used for parsing and SimHash generation.
+				log.Printf("Worker %d: Successfully downloaded content for Pratilipi ID %s. Content length: %d", workerID, id, len(content))
 			}
 		}(i)
 	}
@@ -49,7 +64,7 @@ func main() {
 			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language)
 			if err != nil {
 				log.Printf("ERROR: Could not fetch IDs for %s: %v", language, err)
-				continue 
+				continue
 			}
 
 			if len(ids) == 0 {

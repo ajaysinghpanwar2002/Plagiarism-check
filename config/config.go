@@ -14,6 +14,7 @@ type Config struct {
 	AWSRegion           string
 	Languages           []string
 	NumWorkers          int
+	StoryS3Bucket       string
 }
 
 func LoadConfig() (*Config, error) {
@@ -26,6 +27,7 @@ func LoadConfig() (*Config, error) {
 		AthenaResultsBucket: os.Getenv("ATHENA_RESULTS_BUCKET"),
 		AthenaOutputPrefix:  os.Getenv("ATHENA_OUTPUT_PREFIX"),
 		AWSRegion:           os.Getenv("AWS_REGION"),
+		StoryS3Bucket:       os.Getenv("STORY_S3_BUCKET"),
 		Languages:           []string{"HINDI", "ENGLISH", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
 		NumWorkers:          10,
 	}
