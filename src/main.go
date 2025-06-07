@@ -42,53 +42,44 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	pratilipiIDChannel := make(chan string, 100)
+	type PratilipiTask struct {
+		ID       string
+		Language string
+	}
+	pratilipiTaskChannel := make(chan PratilipiTask, 100)
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.NumWorkers; i++ {
 		wg.Add(1)
 		go func(workerID int) {
 			defer wg.Done()
-			for id := range pratilipiIDChannel {
-				log.Printf("Worker %d: Processing Pratilipi ID %s", workerID, id)
-				content, err := s3Downloader.DownloadStoryContent(ctx, id)
+			for task := range pratilipiTaskChannel {
+				log.Printf("Worker %d: Processing Pratilipi ID %s for language %s", workerID, task.ID, task.Language)
+				content, err := s3Downloader.DownloadStoryContent(ctx, task.ID)
 				if err != nil {
-					log.Printf("Worker %d: ERROR downloading and parsing content for Pratilipi ID %s: %v", workerID, id, err)
+					log.Printf("Worker %d: ERROR downloading and parsing content for Pratilipi ID %s: %v", workerID, task.ID, err)
 					continue
 				}
 
 				if content == "" {
-					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download/parse)", workerID, id)
+					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download/parse)", workerID, task.ID)
 					continue
 				}
 
 				hash := simhash.New(content)
-				// The .String() method to get the hex representation
-				log.Printf("Worker %d: Generated SimHash for Pratilipi ID %s: %s", workerID, id, hash.String())
-				// Store the SimHash in Redis
-				// For now, we assume the language is part of the ID or can be derived.
-				// Let's use a placeholder "UNKNOWN" for language or extract it if possible.
-				// The Athena query fetches by language, so we should pass that along.
-				// This part needs refinement on how language is passed to the worker.
-				// For now, let's assume we can get it.
-				// We will need to modify the channel to send a struct with ID and Language.
 
-				// For now, let's hardcode a language for testing.
-				// This will be addressed when we refine the producer-consumer data flow.
-				language := "UNKNOWN" // Placeholder - to be fixed
-				err = redisClient.StoreSimhash(ctx, id, language, hash)
+				err = redisClient.StoreSimhash(ctx, task.ID, task.Language, hash)
 				if err != nil {
-					log.Printf("Worker %d: ERROR storing SimHash for Pratilipi ID %s: %v", workerID, id, err)
+					log.Printf("Worker %d: ERROR storing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
 				} else {
-					log.Printf("Worker %d: Successfully stored SimHash for Pratilipi ID %s in Redis", workerID, id)
+					log.Printf("Worker %d: Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", workerID, task.ID, task.Language)
 				}
-				log.Printf("Worker %d: Successfully parsed content for Pratilipi ID %s. Clean text length: %d", workerID, id, len(content))
 			}
 		}(i)
 	}
 
 	go func() {
-		defer close(pratilipiIDChannel)
+		defer close(pratilipiTaskChannel)
 		for _, language := range config.Languages {
 			log.Printf("Producer: Fetching Pratilipi IDs for %s", language)
 			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language)
@@ -104,7 +95,7 @@ func main() {
 
 			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
 			for _, id := range ids {
-				pratilipiIDChannel <- id
+				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language} // Send struct
 			}
 		}
 	}()
