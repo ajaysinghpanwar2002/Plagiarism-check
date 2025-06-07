@@ -35,7 +35,7 @@ func LoadConfig() (*Config, error) {
 		NumWorkers:          10,
 		RedisAddr:           os.Getenv("REDIS_ADDR"),
 		RedisPassword:       os.Getenv("REDIS_PASSWORD"),
-		RedisDB:             0,
+		RedisDB:             1,
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||
