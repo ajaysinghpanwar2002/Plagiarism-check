@@ -8,6 +8,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/service/athena v1.51.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.80.1
 	github.com/joho/godotenv v1.5.1
+	golang.org/x/net v0.41.0
 )
 
 require (

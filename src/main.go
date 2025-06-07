@@ -44,16 +44,16 @@ func main() {
 				log.Printf("Worker %d: Processing Pratilipi ID %s", workerID, id)
 				content, err := s3Downloader.DownloadStoryContent(ctx, id)
 				if err != nil {
-					log.Printf("Worker %d: ERROR downloading content for Pratilipi ID %s: %v", workerID, id, err)
+					log.Printf("Worker %d: ERROR downloading and parsing content for Pratilipi ID %s: %v", workerID, id, err)
 					continue
 				}
 				if content == "" {
-					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download)", workerID, id)
+					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download/parse)", workerID, id)
 					continue
 				}
-				// For now, just log the length of the content.
-				// Later, this content will be used for parsing and SimHash generation.
-				log.Printf("Worker %d: Successfully downloaded content for Pratilipi ID %s. Content length: %d", workerID, id, len(content))
+
+				// The content is now clean text, ready for SimHash generation.
+				log.Printf("Worker %d: Successfully parsed content for Pratilipi ID %s. Clean text length: %d", workerID, id, len(content))
 			}
 		}(i)
 	}

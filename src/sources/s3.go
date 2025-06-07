@@ -9,6 +9,8 @@ import (
 	"log"
 	"path/filepath"
 
+	"plagiarism-detector/src/parser"
+
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
@@ -88,9 +90,19 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 			log.Printf("WARN: Failed to read chapter body %s for pratilipi %s: %v. Skipping chapter.", chapterPath, pratilipiID, err)
 			continue
 		}
-		contentBuffer.Write(chapterBody)
-		contentBuffer.WriteString("\n")
+
+		cleanedText, err := parser.Parse(chapterBody)
+		if err != nil {
+			log.Printf("WARN: Failed to parse chapter %s for pratilipi %s: %v. Skipping chapter.", chapterPath, pratilipiID, err)
+			continue
+		}
+
+		if cleanedText != "" {
+			contentBuffer.WriteString(cleanedText)
+			contentBuffer.WriteString("\n")
+		}
 	}
 
 	return contentBuffer.String(), nil
 }
+
