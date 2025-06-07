@@ -17,7 +17,7 @@ type Config struct {
 	StoryS3Bucket       string
 	RedisAddr           string
 	RedisPassword       string
-	RedisDB             string
+	RedisDB             int
 }
 
 func LoadConfig() (*Config, error) {
@@ -35,7 +35,7 @@ func LoadConfig() (*Config, error) {
 		NumWorkers:          10,
 		RedisAddr:           os.Getenv("REDIS_ADDR"),
 		RedisPassword:       os.Getenv("REDIS_PASSWORD"),
-		RedisDB:             os.Getenv("REDIS_DB"),
+		RedisDB:             0,
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||
