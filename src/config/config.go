@@ -28,7 +28,7 @@ func LoadConfig() (*Config, error) {
 		AthenaOutputPrefix:  os.Getenv("ATHENA_OUTPUT_PREFIX"),
 		AWSRegion:           os.Getenv("AWS_REGION"),
 		StoryS3Bucket:       os.Getenv("STORY_S3_BUCKET"),
-		Languages:           []string{"ENGLISH"},
+		Languages:           []string{"HINDI", "ENGLISH", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
 		NumWorkers:          10,
 	}
 

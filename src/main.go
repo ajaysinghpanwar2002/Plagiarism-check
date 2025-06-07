@@ -28,7 +28,6 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to create Athena processor: %v", err)
 	}
-
 	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket)
 	if err != nil {
 		log.Fatalf("Failed to create S3 downloader: %v", err)
@@ -52,8 +51,6 @@ func main() {
 					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download)", workerID, id)
 					continue
 				}
-				// print the content, just for demonstration purposes.
-				fmt.Printf("Worker %d: Content for Pratilipi ID %s:\n%s\n", workerID, id, content)
 				// For now, just log the length of the content.
 				// Later, this content will be used for parsing and SimHash generation.
 				log.Printf("Worker %d: Successfully downloaded content for Pratilipi ID %s. Content length: %d", workerID, id, len(content))
@@ -79,10 +76,6 @@ func main() {
 			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
 			for _, id := range ids {
 				pratilipiIDChannel <- id
-				if len(pratilipiIDChannel) >= 3 {
-					log.Printf("Producer: Reached max limit of %d IDs, stopping.", 3)
-					break
-				}
 			}
 		}
 	}()
