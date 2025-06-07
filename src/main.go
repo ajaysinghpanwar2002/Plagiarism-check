@@ -52,6 +52,8 @@ func main() {
 					continue
 				}
 
+				fmt.Printf("Worker %d: Content for Pratilipi ID %s:\n%s\n", workerID, id, content)
+
 				// The content is now clean text, ready for SimHash generation.
 				log.Printf("Worker %d: Successfully parsed content for Pratilipi ID %s. Clean text length: %d", workerID, id, len(content))
 			}
@@ -76,6 +78,10 @@ func main() {
 			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
 			for _, id := range ids {
 				pratilipiIDChannel <- id
+				if len(pratilipiIDChannel) >= 3 {
+					log.Printf("Producer: Reached max limit of %d IDs, stopping.", 3)
+					break
+				}
 			}
 		}
 	}()
