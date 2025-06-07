@@ -206,13 +206,13 @@ Flag for Review ← Hamming Distance < Threshold ← Get Candidate Hashes
 ### Core Implementation
 
 - [X] Containerize application using Docker
-- [ ] Implement Athena client interface for Pratilipi ID fetching
-- [ ] Develop S3 client for story content download
-- [ ] Create HTML to text parser
-- [ ] Implement 128-bit SimHash algorithm in Go
-- [ ] Build Producer-Consumer model with goroutines
-- [ ] Develop Redis client with LSH bucketing support
-- [ ] Implement Hamming distance calculation for 128-bit SimHashes
+- [X] Implement Athena client interface for Pratilipi ID fetching
+- [X] Develop S3 client for story content download
+- [X] Create HTML to text parser
+- [X] Implement 128-bit SimHash algorithm in Go
+- [X] Build Producer-Consumer model with goroutines
+- [X] Develop Redis client with LSH bucketing support
+- [X] Implement Hamming distance calculation for 128-bit SimHashes
 - [ ] Create HTTP layer for CMS integration
 - [ ] Set up Prometheus metrics and Grafana dashboards
 - [ ] Implement Slack webhook notifications
