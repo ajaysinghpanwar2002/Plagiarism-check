@@ -128,21 +128,3 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 func (rc *RedisClient) Close() error {
 	return rc.client.Close()
 }
-
-func (rc *RedisClient) GetLastProcessedID(ctx context.Context, checkpointKey string) (string, error) {
-	id, err := rc.client.Get(ctx, checkpointKey).Result()
-	if err == redis.Nil {
-		return "", redis.Nil
-	} else if err != nil {
-		return "", fmt.Errorf("failed to get last processed ID for key %s: %w", checkpointKey, err)
-	}
-	return id, nil
-}
-
-func (rc *RedisClient) SetLastProcessedID(ctx context.Context, checkpointKey string, pratilipiID string) error {
-	err := rc.client.Set(ctx, checkpointKey, pratilipiID, 0).Err()
-	if err != nil {
-		return fmt.Errorf("failed to set last processed ID for key %s (ID: %s): %w", checkpointKey, pratilipiID, err)
-	}
-	return nil
-}

@@ -5,7 +5,6 @@ import (
 	"fmt"
 	"log"
 	"sync"
-	"time"
 
 	"plagiarism-detector/src/config"
 	"plagiarism-detector/src/simhash"
@@ -44,9 +43,8 @@ func main() {
 	defer redisClient.Close()
 
 	type PratilipiTask struct {
-		ID            string
-		Language      string
-		CheckpointKey string
+		ID       string
+		Language string
 	}
 	pratilipiTaskChannel := make(chan PratilipiTask, 100)
 	var wg sync.WaitGroup
@@ -72,17 +70,10 @@ func main() {
 
 				plagiarismDetected, err := redisClient.CheckAndStoreSimhash(ctx, task.ID, task.Language, hash)
 				if err != nil {
-					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v. Checkpoint NOT updated.", workerID, task.ID, task.Language, err)
-				} else {
-					if plagiarismDetected {
-						log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
-					}
-					err = redisClient.SetLastProcessedID(ctx, task.CheckpointKey, task.ID)
-					if err != nil {
-						log.Printf("Worker %d: ERROR updating checkpoint for Pratilipi ID %s (key: %s): %v", workerID, task.ID, task.CheckpointKey, err)
-					} else {
-						log.Printf("Worker %d: Successfully processed and checkpointed Pratilipi ID %s (key: %s)", workerID, task.ID, task.CheckpointKey)
-					}
+					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
+				} else if plagiarismDetected {
+					log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
+					// Here we would typically flag it for review.
 				}
 			}
 		}(i)
@@ -90,34 +81,22 @@ func main() {
 
 	go func() {
 		defer close(pratilipiTaskChannel)
-
-		now := time.Now()
-		yesterday := now.AddDate(0, 0, -1)
-		dateKeyPart := yesterday.Format("2006-01-02")
-
 		for _, language := range config.Languages {
-			checkpointKey := fmt.Sprintf("checkpoint:%s:%s", language, dateKeyPart)
-			lastID, err := redisClient.GetLastProcessedID(ctx, checkpointKey)
-			if err != nil {
-				log.Printf("ERROR: Could not fetch last processed ID for %s (key: %s): %v. Skipping language.", language, checkpointKey, err)
-				lastID = ""
-				continue
-			}
 			log.Printf("Producer: Fetching Pratilipi IDs for %s", language)
-			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language, lastID)
+			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language)
 			if err != nil {
 				log.Printf("ERROR: Could not fetch IDs for %s: %v", language, err)
 				continue
 			}
 
 			if len(ids) == 0 {
-				log.Printf("Producer: No new Pratilipi IDs found for %s (after ID %s)", language, lastID)
+				log.Printf("Producer: No new Pratilipi IDs found for %s", language)
 				continue
 			}
 
 			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
 			for _, id := range ids {
-				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language, CheckpointKey: checkpointKey}
+				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language} // Send struct
 			}
 		}
 	}()
