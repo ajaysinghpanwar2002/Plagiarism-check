@@ -2,17 +2,19 @@ package sources
 
 import (
 	"context"
+	"encoding/csv"
 	"fmt"
+	"io"
 	"log"
 	"time"
-	"encoding/csv"
-	"io"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/athena"
 	"github.com/aws/aws-sdk-go-v2/service/athena/types"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/cactus/go-statsd-client/v5/statsd"
+	"plagiarism-detector/src/monitoring"
 )
 
 type AthenaProcessor struct {
@@ -21,9 +23,10 @@ type AthenaProcessor struct {
 	s3Bucket     string
 	database     string
 	outputPrefix string
+	statsdClient statsd.Statter
 }
 
-func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database string) (*AthenaProcessor, error) {
+func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database string, statsdClient statsd.Statter) (*AthenaProcessor, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -35,6 +38,7 @@ func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, dat
 		s3Bucket:     s3Bucket,
 		outputPrefix: outputPrefix,
 		database:     database,
+		statsdClient: statsdClient,
 	}, nil
 }
 
@@ -89,6 +93,7 @@ func (a *AthenaProcessor) waitForQueryCompletion(ctx context.Context, queryExecu
 				reason = *output.QueryExecution.Status.StateChangeReason
 			}
 			return fmt.Errorf("query execution failed or cancelled: %s", reason)
+			monitoring.Increment("athena-query-execution-failed", a.statsdClient)
 		}
 
 		select {
@@ -141,7 +146,7 @@ func (a *AthenaProcessor) processQueryResults(ctx context.Context, queryExecutio
 		}
 		if err != nil {
 			log.Printf("Error reading CSV record: %v", err)
-			continue 
+			continue
 		}
 		if len(record) > 0 {
 			pratilipiIDs = append(pratilipiIDs, record[0])
@@ -159,7 +164,7 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDsForYesterday(ctx context.Con
 	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 	yesterday := today.AddDate(0, 0, -1)
 
-	yesterdayStartStr := yesterday.Format("2006-01-02 15:04:05") 
+	yesterdayStartStr := yesterday.Format("2006-01-02 15:04:05")
 	todayStartStr := today.Format("2006-01-02 15:04:05")
 
 	queryFormat := "SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))"

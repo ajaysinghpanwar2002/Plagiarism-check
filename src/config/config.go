@@ -18,6 +18,9 @@ type Config struct {
 	RedisAddr           string
 	RedisPassword       string
 	RedisDB             int
+	StatsDHost          string
+	StatsDPort          string
+	StatsDPrefix        string
 }
 
 func LoadConfig() (*Config, error) {
@@ -36,10 +39,14 @@ func LoadConfig() (*Config, error) {
 		RedisAddr:           os.Getenv("REDIS_ADDR"),
 		RedisPassword:       os.Getenv("REDIS_PASSWORD"),
 		RedisDB:             1,
+		StatsDHost:          os.Getenv("STATSD_HOST"),
+		StatsDPort:          os.Getenv("STATSD_PORT"),
+		StatsDPrefix:        os.Getenv("STATSD_PREFIX"),
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||
-		config.AthenaOutputPrefix == "" || config.AWSRegion == "" || config.RedisAddr == "" {
+		config.AthenaOutputPrefix == "" || config.AWSRegion == "" || config.RedisAddr == "" ||
+		config.StatsDHost == "" || config.StatsDPort == "" || config.StatsDPrefix == "" {
 		return nil, fmt.Errorf("missing required environment variables for AWS or Redis")
 	}
 

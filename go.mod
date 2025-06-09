@@ -7,6 +7,7 @@ require (
 	github.com/aws/aws-sdk-go-v2/config v1.29.15
 	github.com/aws/aws-sdk-go-v2/service/athena v1.51.0
 	github.com/aws/aws-sdk-go-v2/service/s3 v1.80.1
+	github.com/cactus/go-statsd-client/v5 v5.1.0
 	github.com/joho/godotenv v1.5.1
 	github.com/redis/go-redis/v9 v9.10.0
 	golang.org/x/net v0.41.0
