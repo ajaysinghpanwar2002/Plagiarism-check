@@ -42,12 +42,12 @@ func main() {
 		log.Fatalf("Failed to create Athena processor: %v", err)
 	}
 
-	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket)
+	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket, StatsDClient)
 	if err != nil {
 		log.Fatalf("Failed to create S3 downloader: %v", err)
 	}
 
-	redisClient, err := storage.NewRedisClient(ctx, config.RedisAddr, config.RedisPassword, config.RedisDB)
+	redisClient, err := storage.NewRedisClient(ctx, config.RedisAddr, config.RedisPassword, config.RedisDB, StatsDClient)
 	if err != nil {
 		log.Fatalf("Failed to create Redis client: %v", err)
 	}
@@ -82,8 +82,10 @@ func main() {
 				plagiarismDetected, err := redisClient.CheckAndStoreSimhash(ctx, task.ID, task.Language, hash)
 				if err != nil {
 					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
+					monitoring.Increment("failed-process-simhash", StatsDClient)
 				} else if plagiarismDetected {
 					log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
+					monitoring.Increment("potential-plagiarism-detected", StatsDClient)
 					// Here we would typically flag it for review.
 				}
 			}

@@ -8,7 +8,9 @@ import (
 
 	"plagiarism-detector/src/simhash"
 
+	"github.com/cactus/go-statsd-client/v5/statsd"
 	"github.com/redis/go-redis/v9"
+	"plagiarism-detector/src/monitoring"
 )
 
 const (
@@ -19,10 +21,11 @@ const (
 )
 
 type RedisClient struct {
-	client *redis.Client
+	client       *redis.Client
+	statsdClient statsd.Statter
 }
 
-func NewRedisClient(ctx context.Context, addr, password string, db int) (*RedisClient, error) {
+func NewRedisClient(ctx context.Context, addr, password string, db int, statsdClient statsd.Statter) (*RedisClient, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     addr,
 		Password: password,
@@ -33,7 +36,7 @@ func NewRedisClient(ctx context.Context, addr, password string, db int) (*RedisC
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	return &RedisClient{client: rdb}, nil
+	return &RedisClient{client: rdb, statsdClient: statsdClient}, nil
 }
 
 // It performs the actual storage of the simhash and its bands
@@ -60,8 +63,10 @@ func (rc *RedisClient) storeSimhashInternal(ctx context.Context, pratilipiID, la
 	_, err := pipe.Exec(ctx)
 	if err != nil {
 		return fmt.Errorf("failed to execute Redis pipeline for storing simhash for ID %s: %w", pratilipiID, err)
+		monitoring.Increment("failed-store-simhash", rc.statsdClient)
 	}
 	log.Printf("Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", pratilipiID, language)
+	monitoring.Increment("stored-simhash", rc.statsdClient)
 	return nil
 }
 
@@ -100,10 +105,12 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		candidateHashStr, err := rc.client.HGet(ctx, fullHashKey, candidateID).Result()
 		if err == redis.Nil {
 			log.Printf("WARN: Candidate ID %s found in LSH bucket but not in full hash map %s. Skipping.", candidateID, fullHashKey)
+			monitoring.Increment("candidate-id-not-found-in-full-hash", rc.statsdClient)
 			continue
 		}
 		if err != nil {
 			log.Printf("WARN: Failed to get full hash for candidate ID %s from %s: %v. Skipping.", candidateID, fullHashKey, err)
+			monitoring.Increment("failed-get-full-hash", rc.statsdClient)
 			continue
 		}
 
@@ -118,6 +125,7 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		if distance <= hammingDistanceThreshold {
 			log.Printf("Potential plagiarism DETECTED for Pratilipi ID %s (lang: %s). Similar to %s. Hamming Distance: %d",
 				pratilipiID, language, candidateID, distance)
+			monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
 			return true, nil // Plagiarism detected
 		}
 	}

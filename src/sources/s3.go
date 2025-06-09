@@ -9,11 +9,13 @@ import (
 	"log"
 	"path/filepath"
 
+	"plagiarism-detector/src/monitoring"
 	"plagiarism-detector/src/parser"
 
 	"github.com/aws/aws-sdk-go-v2/aws"
 	"github.com/aws/aws-sdk-go-v2/config"
 	"github.com/aws/aws-sdk-go-v2/service/s3"
+	"github.com/cactus/go-statsd-client/v5/statsd"
 )
 
 type IndexFile struct {
@@ -31,9 +33,10 @@ type IndexFile struct {
 type S3Downloader struct {
 	s3Client      *s3.Client
 	storyS3Bucket string
+	statsdClient  statsd.Statter
 }
 
-func NewS3Downloader(ctx context.Context, region, storyS3Bucket string) (*S3Downloader, error) {
+func NewS3Downloader(ctx context.Context, region, storyS3Bucket string, statsdClient statsd.Statter) (*S3Downloader, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -42,6 +45,7 @@ func NewS3Downloader(ctx context.Context, region, storyS3Bucket string) (*S3Down
 	return &S3Downloader{
 		s3Client:      s3.NewFromConfig(cfg),
 		storyS3Bucket: storyS3Bucket,
+		statsdClient:  statsdClient,
 	}, nil
 }
 
@@ -54,6 +58,7 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 	})
 	if err != nil {
 		return "", fmt.Errorf("failed to download index file %s for pratilipi %s: %w", indexPath, pratilipiID, err)
+		monitoring.Increment("failed-download-index", s.statsdClient)
 	}
 	defer indexObj.Body.Close()
 
@@ -69,6 +74,7 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 
 	if len(indexData.Chapters) == 0 {
 		log.Printf("No chapters found for pratilipi ID %s", pratilipiID)
+		monitoring.Increment("no-chapters-found", s.statsdClient)
 		return "", nil
 	}
 
@@ -81,6 +87,7 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 		})
 		if err != nil {
 			log.Printf("WARN: Failed to download chapter %s for pratilipi %s: %v. Skipping chapter.", chapterPath, pratilipiID, err)
+			monitoring.Increment("failed-download-chapter", s.statsdClient)
 			continue
 		}
 		defer chapterObj.Body.Close()
@@ -105,4 +112,3 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 
 	return contentBuffer.String(), nil
 }
-

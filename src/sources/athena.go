@@ -154,6 +154,7 @@ func (a *AthenaProcessor) processQueryResults(ctx context.Context, queryExecutio
 	}
 
 	log.Printf("Successfully processed %d records from query %s", len(pratilipiIDs), queryExecutionID)
+	monitoring.Increment("athena-query-execution-success", a.statsdClient)
 	return pratilipiIDs, nil
 }
 
