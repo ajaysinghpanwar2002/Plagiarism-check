@@ -214,7 +214,7 @@ Flag for Review ← Hamming Distance < Threshold ← Get Candidate Hashes
 - [X] Develop Redis client with LSH bucketing support
 - [X] Implement Hamming distance calculation for 128-bit SimHashes
 - [ ] Create HTTP layer for CMS integration
-- [ ] Set up Prometheus metrics and Grafana dashboards
+- [X] Set up Prometheus metrics and Grafana dashboards
 - [ ] Implement Slack webhook notifications
 
 ### Additional Tasks

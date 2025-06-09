@@ -109,7 +109,7 @@ func main() {
 
 			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
 			for _, id := range ids {
-				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language} // Send struct
+				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language}
 			}
 		}
 	}()
