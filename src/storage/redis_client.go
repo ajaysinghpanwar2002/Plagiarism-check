@@ -129,6 +129,7 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		if distance <= hammingDistanceThreshold {
 			log.Printf("Potential plagiarism DETECTED for Pratilipi ID %s (lang: %s). Similar to %s. Hamming Distance: %d",
 				pratilipiID, language, candidateID, distance)
+			_ , err = rc.client.SAdd(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID).Result()
 			monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
 			return true, nil // Plagiarism detected
 		}

@@ -57,8 +57,8 @@ func (s *S3Downloader) DownloadStoryContent(ctx context.Context, pratilipiID str
 		Key:    aws.String(indexPath),
 	})
 	if err != nil {
-		return "", fmt.Errorf("failed to download index file %s for pratilipi %s: %w", indexPath, pratilipiID, err)
 		monitoring.Increment("failed-download-index", s.statsdClient)
+		return "", fmt.Errorf("failed to download index file %s for pratilipi %s: %w", indexPath, pratilipiID, err)
 	}
 	defer indexObj.Body.Close()
 

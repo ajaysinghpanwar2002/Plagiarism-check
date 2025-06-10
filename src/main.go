@@ -81,7 +81,6 @@ func main() {
 				} else if plagiarismDetected {
 					log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
 					monitoring.Increment("potential-plagiarism-detected", StatsDClient)
-					// Here we would typically flag it for review.
 				}
 			}
 		}(i)
@@ -95,6 +94,7 @@ func main() {
 			if err != nil {
 				if err == context.Canceled || err == context.DeadlineExceeded {
 					log.Printf("Producer: Fetching for %s was cancelled or timed out: %v. Stopping producer.", language, err)
+					monitoring.Increment("fetch-cancelled-or-timed-out", StatsDClient)
 					return
 				}
 				log.Printf("ERROR: Could not complete fetching IDs for %s: %v. Continuing with next language.", language, err)
@@ -106,6 +106,7 @@ func main() {
 				}
 			} else {
 				log.Printf("Producer: Finished fetching IDs for %s.", language)
+				monitoring.Increment("athena-fetch-completed", StatsDClient)
 			}
 		}
 		log.Printf("Producer: All languages processed for ID fetching.")
