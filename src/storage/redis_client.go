@@ -4,7 +4,9 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"strconv"
 	"strings"
+	"time"
 
 	"plagiarism-detector/src/simhash"
 
@@ -18,6 +20,8 @@ const (
 	bandBitSize              = 16
 	bandMask                 = uint64(1<<bandBitSize) - 1
 	hammingDistanceThreshold = 3
+	checkpointKeyFormat      = "plagiarism_detector:checkpoint:athena_fetch_all:%s:offset"
+	checkpointTTL            = 7 * 24 * time.Hour
 )
 
 type RedisClient struct {
@@ -135,4 +139,40 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 
 func (rc *RedisClient) Close() error {
 	return rc.client.Close()
+}
+
+func (rc *RedisClient) GetCheckpointOffset(ctx context.Context, language string) (int64, error) {
+	key := fmt.Sprintf(checkpointKeyFormat, strings.ToUpper(language))
+	val, err := rc.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return 0, nil
+	}
+	if err != nil {
+		return 0, fmt.Errorf("failed to get checkpoint offset for language %s from Redis: %w", language, err)
+	}
+	offset, err := strconv.ParseInt(val, 10, 64)
+	if err != nil {
+		log.Printf("WARN: Failed to parse checkpoint offset '%s' for language %s: %v. Defaulting to 0.", val, language, err)
+		return 0, nil
+	}
+	return offset, nil
+}
+
+func (rc *RedisClient) SetCheckpointOffset(ctx context.Context, language string, offset int64) error {
+	key := fmt.Sprintf(checkpointKeyFormat, strings.ToUpper(language))
+	err := rc.client.Set(ctx, key, offset, checkpointTTL).Err()
+	if err != nil {
+		return fmt.Errorf("failed to set checkpoint offset for language %s to %d in Redis: %w", language, offset, err)
+	}
+	return nil
+}
+
+func (rc *RedisClient) DeleteCheckpointOffset(ctx context.Context, language string) error {
+	key := fmt.Sprintf(checkpointKeyFormat, strings.ToUpper(language))
+	err := rc.client.Del(ctx, key).Err()
+	if err != nil && err != redis.Nil {
+		return fmt.Errorf("failed to delete checkpoint offset for language %s from Redis: %w", language, err)
+	}
+	log.Printf("Deleted checkpoint for language %s (if existed)", strings.ToUpper(language))
+	return nil
 }

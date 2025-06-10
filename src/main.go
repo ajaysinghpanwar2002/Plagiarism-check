@@ -30,18 +30,6 @@ func main() {
 	}
 	defer StatsDClient.Close()
 
-	processor, err := sources.NewAthenaProcessor(
-		ctx,
-		config.AWSRegion,
-		config.AthenaResultsBucket,
-		config.AthenaOutputPrefix,
-		config.AthenaDatabase,
-		StatsDClient,
-	)
-	if err != nil {
-		log.Fatalf("Failed to create Athena processor: %v", err)
-	}
-
 	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket, StatsDClient)
 	if err != nil {
 		log.Fatalf("Failed to create S3 downloader: %v", err)
@@ -53,11 +41,21 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	type PratilipiTask struct {
-		ID       string
-		Language string
+	pratilipiTaskChannel := make(chan sources.PratilipiData, 100)
+
+	processor, err := sources.NewAthenaProcessor(
+		ctx,
+		config.AWSRegion,
+		config.AthenaResultsBucket,
+		config.AthenaOutputPrefix,
+		config.AthenaDatabase,
+		StatsDClient,
+		redisClient,
+	)
+	if err != nil {
+		log.Fatalf("Failed to create Athena processor: %v", err)
 	}
-	pratilipiTaskChannel := make(chan PratilipiTask, 100)
+
 	var wg sync.WaitGroup
 
 	for i := 0; i < config.NumWorkers; i++ {
@@ -95,23 +93,25 @@ func main() {
 	go func() {
 		defer close(pratilipiTaskChannel)
 		for _, language := range config.Languages {
-			log.Printf("Producer: Fetching Pratilipi IDs for %s", language)
-			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language)
+			log.Printf("Producer: Starting to fetch Pratilipi IDs for %s (with checkpointing)", language)
+			err := processor.FetchPublishedPratilipiIDs(ctx, language, pratilipiTaskChannel)
 			if err != nil {
-				log.Printf("ERROR: Could not fetch IDs for %s: %v", language, err)
-				continue
-			}
-
-			if len(ids) == 0 {
-				log.Printf("Producer: No new Pratilipi IDs found for %s", language)
-				continue
-			}
-
-			log.Printf("Producer: Found %d IDs for %s. Sending to workers.", len(ids), language)
-			for _, id := range ids {
-				pratilipiTaskChannel <- PratilipiTask{ID: id, Language: language} // Send struct
+				if err == context.Canceled || err == context.DeadlineExceeded {
+					log.Printf("Producer: Fetching for %s was cancelled or timed out: %v. Stopping producer.", language, err)
+					return
+				}
+				log.Printf("ERROR: Could not complete fetching IDs for %s: %v. Continuing with next language.", language, err)
+				select {
+				case <-ctx.Done():
+					log.Printf("Producer: Context is done, stopping further language processing.")
+					return
+				default:
+				}
+			} else {
+				log.Printf("Producer: Finished fetching IDs for %s.", language)
 			}
 		}
+		log.Printf("Producer: All languages processed for ID fetching.")
 	}()
 
 	wg.Wait()

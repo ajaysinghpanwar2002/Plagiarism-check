@@ -15,7 +15,13 @@ import (
 	"github.com/aws/aws-sdk-go-v2/service/s3"
 	"github.com/cactus/go-statsd-client/v5/statsd"
 	"plagiarism-detector/src/monitoring"
+	"plagiarism-detector/src/storage"
 )
+
+type PratilipiData struct {
+	ID       string
+	Language string
+}
 
 type AthenaProcessor struct {
 	athenaClient *athena.Client
@@ -24,9 +30,10 @@ type AthenaProcessor struct {
 	database     string
 	outputPrefix string
 	statsdClient statsd.Statter
+	redisClient  *storage.RedisClient
 }
 
-func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database string, statsdClient statsd.Statter) (*AthenaProcessor, error) {
+func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database string, statsdClient statsd.Statter, redisClient *storage.RedisClient) (*AthenaProcessor, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
@@ -39,6 +46,7 @@ func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, dat
 		outputPrefix: outputPrefix,
 		database:     database,
 		statsdClient: statsdClient,
+		redisClient:  redisClient,
 	}, nil
 }
 
@@ -173,4 +181,114 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDsForYesterday(ctx context.Con
 
 	log.Printf("Executing query: %s", query)
 	return a.executeQueryAndProcess(ctx, query)
+}
+
+func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
+	ctx context.Context,
+	language string,
+	taskChannel chan<- PratilipiData,
+) error {
+	initialOffset, err := a.redisClient.GetCheckpointOffset(ctx, language)
+	if err != nil {
+		log.Printf("WARN: Failed to get checkpoint for %s, starting from offset 0: %v", language, err)
+		initialOffset = 0
+	}
+	log.Printf("Resuming FetchPublishedPratilipiIDs for %s from offset %d", language, initialOffset)
+
+	currentQueryOffset := initialOffset
+	var itemsSentThisRun int64 = 0
+	var itemsSentSinceLastSuccessfulCheckpoint int64 = 0
+
+	const batchSize = 10000
+	const checkpointUpdateCountThreshold = 5000
+
+	defer func() {
+		if itemsSentSinceLastSuccessfulCheckpoint > 0 {
+			finalCheckpointValue := initialOffset + itemsSentThisRun
+			log.Printf("Attempting to set final checkpoint for %s at offset %d on exit. (Items sent this run: %d, items since last checkpoint: %d)",
+				language, finalCheckpointValue, itemsSentThisRun, itemsSentSinceLastSuccessfulCheckpoint)
+
+			saveCtx, cancelSave := context.WithTimeout(context.Background(), 30*time.Second)
+			defer cancelSave()
+
+			if err := a.redisClient.SetCheckpointOffset(saveCtx, language, finalCheckpointValue); err != nil {
+				log.Printf("ERROR: Failed to set final checkpoint for %s at offset %d: %v", language, finalCheckpointValue, err)
+			} else {
+				log.Printf("Successfully set final checkpoint for %s at offset %d on exit", language, finalCheckpointValue)
+			}
+		} else if itemsSentThisRun > 0 {
+			log.Printf("No new items processed since last successful checkpoint for %s. Final checkpoint not updated. (Total items sent this run: %d)", language, itemsSentThisRun)
+		}
+	}()
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Printf("Context cancelled, stopping FetchPublishedPratilipiIDs for %s.", language)
+			return ctx.Err()
+		default:
+			// Continue if context is not cancelled.
+		}
+
+		query := fmt.Sprintf(
+			"SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' ORDER BY id DESC LIMIT %d OFFSET %d",
+			language,
+			batchSize,
+			currentQueryOffset,
+		)
+
+		log.Printf("Fetching batch for %s with query: %s", language, query)
+		batchIDs, err := a.executeQueryAndProcess(ctx, query)
+		if err != nil {
+			log.Printf("ERROR: Failed to execute query for batch (lang: %s, offset: %d): %v. Retrying after delay.", language, currentQueryOffset, err)
+			select {
+			case <-time.After(10 * time.Second):
+				continue
+			case <-ctx.Done():
+				log.Printf("Context cancelled while waiting to retry query for %s.", language)
+				return ctx.Err()
+			}
+		}
+
+		if len(batchIDs) == 0 {
+			log.Printf("No more IDs found for %s at offset %d. Fetch completed.", language, currentQueryOffset)
+			break
+		}
+
+		log.Printf("Fetched %d IDs for %s (offset: %d)", len(batchIDs), language, currentQueryOffset)
+
+		for _, id := range batchIDs {
+			task := PratilipiData{ID: id, Language: language}
+			select {
+			case taskChannel <- task:
+				itemsSentThisRun++
+				itemsSentSinceLastSuccessfulCheckpoint++
+			case <-ctx.Done():
+				log.Printf("Context cancelled while sending task for ID %s, language %s.", id, language)
+				return ctx.Err()
+			}
+		}
+
+		currentQueryOffset += int64(len(batchIDs))
+
+		checkpointValueToStore := initialOffset + itemsSentThisRun
+		if itemsSentSinceLastSuccessfulCheckpoint >= checkpointUpdateCountThreshold {
+			log.Printf("Attempting to set checkpoint for %s at offset %d. (Items since last checkpoint: %d)",
+				language, checkpointValueToStore, itemsSentSinceLastSuccessfulCheckpoint)
+
+			checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 15*time.Second)
+			err := a.redisClient.SetCheckpointOffset(checkpointCtx, language, checkpointValueToStore)
+			checkpointCancel()
+
+			if err != nil {
+				log.Printf("ERROR: Failed to set checkpoint for %s at offset %d: %v", language, checkpointValueToStore, err)
+			} else {
+				log.Printf("Successfully set checkpoint for %s at offset %d", language, checkpointValueToStore)
+				itemsSentSinceLastSuccessfulCheckpoint = 0 // Reset counter on successful save.
+			}
+		}
+	}
+
+	log.Printf("Finished fetching all IDs for language %s. Total items sent in this run: %d. Effective next offset for resumption: %d.", language, itemsSentThisRun, initialOffset+itemsSentThisRun)
+	return nil
 }
