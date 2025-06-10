@@ -6,15 +6,12 @@ import (
 	"log"
 	"sync"
 
-	"github.com/cactus/go-statsd-client/v5/statsd"
 	"plagiarism-detector/src/config"
 	"plagiarism-detector/src/monitoring"
 	"plagiarism-detector/src/simhash"
 	"plagiarism-detector/src/sources"
 	"plagiarism-detector/src/storage"
 )
-
-var StatsDClient statsd.Statter
 
 func main() {
 	config, err := config.LoadConfig()
@@ -24,7 +21,7 @@ func main() {
 
 	ctx := context.Background()
 
-	StatsDClient, err = monitoring.ConnectStatsd(config.StatsDHost, config.StatsDPort, config.StatsDPrefix)
+	StatsDClient, err := monitoring.ConnectStatsd(config.StatsDHost, config.StatsDPort, config.StatsDPrefix)
 	if err != nil {
 		log.Println("Unable to connect to grafana", err)
 	}
