@@ -6,6 +6,7 @@ import (
 	"log"
 	"strconv"
 	"strings"
+	"sync"
 	"time"
 
 	"plagiarism-detector/src/simhash"
@@ -16,31 +17,133 @@ import (
 )
 
 const (
-	numBands                 = 8
-	bandBitSize              = 16
-	bandMask                 = uint64(1<<bandBitSize) - 1
-	hammingDistanceThreshold = 3
-	checkpointKeyFormat      = "plagiarism_detector:checkpoint:athena_fetch_all:%s:offset"
-	checkpointTTL            = 7 * 24 * time.Hour
+	numBands                   = 8
+	bandBitSize                = 16
+	bandMask                   = uint64(1<<bandBitSize) - 1
+	hammingDistanceThreshold   = 3
+	checkpointKeyFormat        = "plagiarism_detector:checkpoint:athena_fetch_all:%s:offset"
+	checkpointTTL              = 7 * 24 * time.Hour
+	defaultSimhashBatchSize    = 500
+	defaultSimhashBatchTimeout = 5 * time.Second
+	simhashChannelCapacity     = 1000
 )
 
-type RedisClient struct {
-	client       *redis.Client
-	statsdClient statsd.Statter
+type SimhashData struct {
+	PratilipiID string
+	Language    string
+	Hash        simhash.Simhash
 }
 
-func NewRedisClient(ctx context.Context, addr, password string, db int, statsdClient statsd.Statter) (*RedisClient, error) {
+type RedisClient struct {
+	client           *redis.Client
+	statsdClient     statsd.Statter
+	simhashBatchChan chan SimhashData
+	storerWg         sync.WaitGroup
+	storerCancelFunc context.CancelFunc
+	batchSize        int
+	batchTimeout     time.Duration
+}
+
+func NewRedisClient(parentCtx context.Context, addr, password string, db int, statsdClient statsd.Statter) (*RedisClient, error) {
 	rdb := redis.NewClient(&redis.Options{
 		Addr:     addr,
 		Password: password,
 		DB:       db,
 	})
 
-	if _, err := rdb.Ping(ctx).Result(); err != nil {
+	if _, err := rdb.Ping(parentCtx).Result(); err != nil {
 		return nil, fmt.Errorf("failed to connect to Redis: %w", err)
 	}
 
-	return &RedisClient{client: rdb, statsdClient: statsdClient}, nil
+	storerCtx, storerCancel := context.WithCancel(parentCtx)
+
+	rc := &RedisClient{
+		client:           rdb,
+		statsdClient:     statsdClient,
+		simhashBatchChan: make(chan SimhashData, simhashChannelCapacity),
+		storerCancelFunc: storerCancel,
+		batchSize:        defaultSimhashBatchSize,
+		batchTimeout:     defaultSimhashBatchTimeout,
+	}
+
+	rc.storerWg.Add(1)
+	go rc.runSimhashStorer(storerCtx)
+
+	return rc, nil
+}
+
+func (rc *RedisClient) runSimhashStorer(ctx context.Context) {
+	defer rc.storerWg.Done()
+	batch := make([]SimhashData, 0, rc.batchSize)
+
+	for {
+		select {
+		case <-ctx.Done():
+			log.Println("Simhash storer: context cancelled, flushing remaining items and exiting.")
+			if len(batch) > 0 {
+				flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+				rc.flushSimhashBatch(flushCtx, batch)
+				cancel()
+			}
+			return
+		case data, ok := <-rc.simhashBatchChan:
+			if !ok {
+				log.Println("Simhash storer: channel closed, flushing remaining items and exiting.")
+				if len(batch) > 0 {
+					flushCtx, cancel := context.WithTimeout(context.Background(), 30*time.Second)
+					rc.flushSimhashBatch(flushCtx, batch)
+					cancel()
+				}
+				return
+			}
+			batch = append(batch, data)
+			if len(batch) >= rc.batchSize {
+				log.Printf("Simhash storer: batch size reached (%d), flushing.", len(batch))
+				flushCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				rc.flushSimhashBatch(flushCtx, batch)
+				cancel()
+				batch = make([]SimhashData, 0, rc.batchSize)
+			}
+		}
+	}
+}
+
+func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashData) error {
+	if len(batch) == 0 {
+		return nil
+	}
+	pipe := rc.client.Pipeline()
+	processedIDs := make([]string, 0, len(batch))
+
+	for _, data := range batch {
+		fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(data.Language))
+		pipe.HSet(ctx, fullHashKey, data.PratilipiID, data.Hash.String())
+
+		for i := 0; i < numBands; i++ {
+			var bandValue uint64
+			if i < numBands/2 { // First 4 bands from Low
+				shift := uint(i * bandBitSize)
+				bandValue = (data.Hash.Low >> shift) & bandMask
+			} else { // Next 4 bands from High
+				shift := uint((i - numBands/2) * bandBitSize)
+				bandValue = (data.Hash.High >> shift) & bandMask
+			}
+			bucketKey := fmt.Sprintf("%s:%d:%x", strings.ToUpper(data.Language), i, bandValue)
+			pipe.SAdd(ctx, bucketKey, data.PratilipiID)
+		}
+		processedIDs = append(processedIDs, data.PratilipiID)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		log.Printf("ERROR: Failed to execute Redis pipeline for storing simhash batch (count: %d): %v. IDs: %v", len(batch), err, processedIDs)
+		monitoring.Increment("failed-store-simhash-batch", rc.statsdClient)
+		return fmt.Errorf("failed to execute Redis pipeline for storing simhash batch: %w", err)
+	}
+
+	log.Printf("Successfully stored batch of %d SimHashes in Redis. First ID: %s", len(batch), batch[0].PratilipiID)
+	monitoring.Increment("stored-simhash-batch", rc.statsdClient)
+	return nil
 }
 
 // It performs the actual storage of the simhash and its bands
@@ -129,15 +232,31 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		if distance <= hammingDistanceThreshold {
 			log.Printf("Potential plagiarism DETECTED for Pratilipi ID %s (lang: %s). Similar to %s. Hamming Distance: %d",
 				pratilipiID, language, candidateID, distance)
-			_ , err = rc.client.SAdd(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID).Result()
+			_, err = rc.client.SAdd(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID).Result()
 			return true, nil // Plagiarism detected
 		}
 	}
 
-	return false, rc.storeSimhashInternal(ctx, pratilipiID, language, newHash)
+	dataToStore := SimhashData{PratilipiID: pratilipiID, Language: language, Hash: newHash}
+	select {
+	case rc.simhashBatchChan <- dataToStore:
+	case <-ctx.Done():
+		log.Printf("ERROR: Context cancelled before queuing SimHash for Pratilipi ID %s (lang: %s): %v", pratilipiID, language, ctx.Err())
+		return false, fmt.Errorf("context cancelled before queuing simhash for ID %s: %w", pratilipiID, ctx.Err())
+	}
+	return false, nil
 }
 
 func (rc *RedisClient) Close() error {
+	log.Println("Closing RedisClient: signalling simhash storer to stop...")
+	if rc.storerCancelFunc != nil {
+		rc.storerCancelFunc()
+	}
+
+	rc.storerWg.Wait()
+	log.Println("Simhash storer finished.")
+
+	log.Println("Closing Redis connection.")
 	return rc.client.Close()
 }
 

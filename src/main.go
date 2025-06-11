@@ -19,7 +19,8 @@ func main() {
 		log.Fatalf("Failed to load configuration: %v", err)
 	}
 
-	ctx := context.Background()
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
 
 	StatsDClient, err := monitoring.ConnectStatsd(config.StatsDHost, config.StatsDPort, config.StatsDPrefix)
 	if err != nil {
