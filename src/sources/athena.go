@@ -102,8 +102,8 @@ func (a *AthenaProcessor) waitForQueryCompletion(ctx context.Context, queryExecu
 			if output.QueryExecution.Status.StateChangeReason != nil {
 				reason = *output.QueryExecution.Status.StateChangeReason
 			}
-			return fmt.Errorf("query execution failed or cancelled: %s", reason)
 			monitoring.Increment("athena-query-execution-failed", a.statsdClient)
+			return fmt.Errorf("query execution failed or cancelled: %s", reason)
 		}
 
 		select {
@@ -319,4 +319,3 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 	log.Printf("Finished fetching all IDs for language %s. Total items sent in this run: %d. Effective next offset for resumption: %d.", language, itemsSentThisRun, initialOffset+itemsSentThisRun)
 	return nil
 }
-
