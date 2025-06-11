@@ -24,29 +24,31 @@ type PratilipiData struct {
 }
 
 type AthenaProcessor struct {
-	athenaClient *athena.Client
-	s3Client     *s3.Client
-	s3Bucket     string
-	database     string
-	outputPrefix string
-	statsdClient statsd.Statter
-	redisClient  *storage.RedisClient
+	athenaClient   *athena.Client
+	s3Client       *s3.Client
+	s3Bucket       string
+	database       string
+	outputPrefix   string
+	statsdClient   statsd.Statter
+	redisClient    *storage.RedisClient
+	fetchStartDate string
 }
 
-func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database string, statsdClient statsd.Statter, redisClient *storage.RedisClient) (*AthenaProcessor, error) {
+func NewAthenaProcessor(ctx context.Context, region, s3Bucket, outputPrefix, database, fetchStartDate string, statsdClient statsd.Statter, redisClient *storage.RedisClient) (*AthenaProcessor, error) {
 	cfg, err := config.LoadDefaultConfig(ctx, config.WithRegion(region))
 	if err != nil {
 		return nil, fmt.Errorf("failed to load AWS config: %w", err)
 	}
 
 	return &AthenaProcessor{
-		athenaClient: athena.NewFromConfig(cfg),
-		s3Client:     s3.NewFromConfig(cfg),
-		s3Bucket:     s3Bucket,
-		outputPrefix: outputPrefix,
-		database:     database,
-		statsdClient: statsdClient,
-		redisClient:  redisClient,
+		athenaClient:   athena.NewFromConfig(cfg),
+		s3Client:       s3.NewFromConfig(cfg),
+		s3Bucket:       s3Bucket,
+		outputPrefix:   outputPrefix,
+		database:       database,
+		statsdClient:   statsdClient,
+		redisClient:    redisClient,
+		fetchStartDate: fetchStartDate,
 	}, nil
 }
 
@@ -166,20 +168,31 @@ func (a *AthenaProcessor) processQueryResults(ctx context.Context, queryExecutio
 	return pratilipiIDs, nil
 }
 
-func (a *AthenaProcessor) FetchPublishedPratilipiIDsForYesterday(ctx context.Context, language string) ([]string, error) {
+func (a *AthenaProcessor) FetchPublishedPratilipiIDsForTargetDate(ctx context.Context, language string) ([]string, error) {
 	now := time.Now()
 	loc := now.Location()
 
-	today := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-	yesterday := today.AddDate(0, 0, -1)
+	targetDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
 
-	yesterdayStartStr := yesterday.Format("2006-01-02 15:04:05")
-	todayStartStr := today.Format("2006-01-02 15:04:05")
+	if a.fetchStartDate != "" {
+		parsedDate, err := time.Parse("2006-01-02", a.fetchStartDate)
+		if err == nil {
+			targetDate = time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, loc)
+		} else {
+			log.Printf("WARN: Invalid ATHENA_FETCH_START_DATE format: '%s'. Expected YYYY-MM-DD. Defaulting to today.", a.fetchStartDate)
+		}
+	}
+
+	queryPeriodStart := targetDate
+	queryPeriodEnd := targetDate.AddDate(0, 0, 1) // Day after targetDate, for exclusive upper bound
+
+	queryPeriodStartStr := queryPeriodStart.Format("2006-01-02 15:04:05")
+	queryPeriodEndStr := queryPeriodEnd.Format("2006-01-02 15:04:05")
 
 	queryFormat := "SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))"
-	query := fmt.Sprintf(queryFormat, language, yesterdayStartStr, todayStartStr)
+	query := fmt.Sprintf(queryFormat, language, queryPeriodStartStr, queryPeriodEndStr)
 
-	log.Printf("Executing query: %s", query)
+	log.Printf("Executing query for target date %s: %s", targetDate.Format("2006-01-02"), query)
 	return a.executeQueryAndProcess(ctx, query)
 }
 
@@ -194,6 +207,19 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		initialOffset = 0
 	}
 	log.Printf("Resuming FetchPublishedPratilipiIDs for %s from offset %d", language, initialOffset)
+
+	dateFilterClause := ""
+	if a.fetchStartDate != "" {
+		_, err := time.Parse("2006-01-02", a.fetchStartDate)
+		if err != nil {
+			log.Printf("WARN: Invalid ATHENA_FETCH_START_DATE format '%s'. Expected 'YYYY-MM-DD'. The date filter will NOT be applied.", a.fetchStartDate)
+		} else {
+			startDateForQuery := fmt.Sprintf("%s 00:00:00", a.fetchStartDate)
+			dateFilterClause = fmt.Sprintf(" AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))", startDateForQuery)
+			log.Printf("Applying start date filter: fetching content published on or after %s for language %s.", a.fetchStartDate, language)
+			log.Printf("NOTE: Using a start date filter with offset-based checkpointing assumes the set of historical data is stable. If you change the start date, consider deleting the existing Redis checkpoints for this language to force a full re-fetch from the new date.")
+		}
+	}
 
 	currentQueryOffset := initialOffset
 	var itemsSentThisRun int64 = 0
@@ -231,8 +257,9 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		}
 
 		query := fmt.Sprintf(
-			"SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' ORDER BY id DESC LIMIT %d OFFSET %d",
+			"SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED'%s ORDER BY id DESC LIMIT %d OFFSET %d",
 			language,
+			dateFilterClause,
 			batchSize,
 			currentQueryOffset,
 		)
@@ -292,3 +319,4 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 	log.Printf("Finished fetching all IDs for language %s. Total items sent in this run: %d. Effective next offset for resumption: %d.", language, itemsSentThisRun, initialOffset+itemsSentThisRun)
 	return nil
 }
+

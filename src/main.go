@@ -46,6 +46,7 @@ func main() {
 		config.AthenaResultsBucket,
 		config.AthenaOutputPrefix,
 		config.AthenaDatabase,
+		config.AthenaFetchStartDate,
 		StatsDClient,
 		redisClient,
 	)
@@ -115,3 +116,4 @@ func main() {
 	wg.Wait()
 	fmt.Println("All Pratilipi IDs have been processed. Application finished.")
 }
+
