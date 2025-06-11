@@ -34,6 +34,7 @@ func main() {
 		config.AthenaOutputPrefix,
 		config.AthenaDatabase,
 		StatsDClient,
+		config.AthenaFetchStartDate,
 	)
 	if err != nil {
 		log.Fatalf("Failed to create Athena processor: %v", err)
@@ -93,7 +94,7 @@ func main() {
 		defer close(pratilipiTaskChannel)
 		for _, language := range config.Languages {
 			log.Printf("Producer: Fetching Pratilipi IDs for %s", language)
-			ids, err := processor.FetchPublishedPratilipiIDsForYesterday(ctx, language)
+			ids, err := processor.FetchPublishedPratilipiIDsForTargetDate(ctx, language)
 			if err != nil {
 				log.Printf("ERROR: Could not fetch IDs for %s: %v", language, err)
 				continue
