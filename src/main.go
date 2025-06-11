@@ -70,6 +70,7 @@ func main() {
 
 				if content == "" {
 					log.Printf("Worker %d: No content found for Pratilipi ID %s (or all chapters failed to download/parse)", workerID, task.ID)
+					monitoring.Increment("no-content-found-text-empty", StatsDClient)
 					continue
 				}
 
@@ -107,7 +108,6 @@ func main() {
 				}
 			} else {
 				log.Printf("Producer: Finished fetching IDs for %s.", language)
-				monitoring.Increment("athena-fetch-completed", StatsDClient)
 			}
 		}
 		log.Printf("Producer: All languages processed for ID fetching.")
@@ -116,4 +116,3 @@ func main() {
 	wg.Wait()
 	fmt.Println("All Pratilipi IDs have been processed. Application finished.")
 }
-
