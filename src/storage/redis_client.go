@@ -99,7 +99,7 @@ func (rc *RedisClient) runSimhashStorer(ctx context.Context) {
 			batch = append(batch, data)
 			if len(batch) >= rc.batchSize {
 				log.Printf("Simhash storer: batch size reached (%d), flushing.", len(batch))
-				flushCtx, cancel := context.WithTimeout(ctx, 15*time.Second)
+				flushCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
 				rc.flushSimhashBatch(flushCtx, batch)
 				cancel()
 				batch = make([]SimhashData, 0, rc.batchSize)
@@ -169,8 +169,8 @@ func (rc *RedisClient) storeSimhashInternal(ctx context.Context, pratilipiID, la
 
 	_, err := pipe.Exec(ctx)
 	if err != nil {
-		return fmt.Errorf("failed to execute Redis pipeline for storing simhash for ID %s: %w", pratilipiID, err)
 		monitoring.Increment("failed-store-simhash", rc.statsdClient)
+		return fmt.Errorf("failed to execute Redis pipeline for storing simhash for ID %s: %w", pratilipiID, err)
 	}
 	log.Printf("Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", pratilipiID, language)
 	monitoring.Increment("stored-simhash", rc.statsdClient)
