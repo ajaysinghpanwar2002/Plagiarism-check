@@ -115,6 +115,24 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 	pipe := rc.client.Pipeline()
 	processedIDs := make([]string, 0, len(batch))
 
+	for i := 0; i < len(batch); i++ {
+		for j := i + 1; j < len(batch); j++ {
+			item1 := batch[i]
+			item2 := batch[j]
+
+			if item1.Language == item2.Language {
+				distance := simhash.HammingDistance(item1.Hash, item2.Hash)
+
+				if distance <= hammingDistanceThreshold {
+					log.Printf("IN-BATCH Plagiarism DETECTED for Pratilipi ID %s and %s (lang: %s). Hamming Distance: %d",
+						item1.PratilipiID, item2.PratilipiID, item1.Language, distance)
+					monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
+					pipe.HSet(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(item1.Language)), item1.PratilipiID, item1.PratilipiID).Result()
+				}
+			}
+		}
+	}
+
 	for _, data := range batch {
 		fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(data.Language))
 		pipe.HSet(ctx, fullHashKey, data.PratilipiID, data.Hash.String())
@@ -295,3 +313,4 @@ func (rc *RedisClient) DeleteCheckpointOffset(ctx context.Context, language stri
 	log.Printf("Deleted checkpoint for language %s (if existed)", strings.ToUpper(language))
 	return nil
 }
+
