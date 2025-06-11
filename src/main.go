@@ -62,7 +62,6 @@ func main() {
 		go func(workerID int) {
 			defer wg.Done()
 			for task := range pratilipiTaskChannel {
-				log.Printf("Worker %d: Processing Pratilipi ID %s for language %s", workerID, task.ID, task.Language)
 				content, err := s3Downloader.DownloadStoryContent(ctx, task.ID)
 				if err != nil {
 					log.Printf("Worker %d: ERROR downloading and parsing content for Pratilipi ID %s: %v", workerID, task.ID, err)
@@ -82,7 +81,6 @@ func main() {
 					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
 					monitoring.Increment("failed-process-simhash", StatsDClient)
 				} else if plagiarismDetected {
-					log.Printf("Worker %d: Potential PLAGIARISM DETECTED for Pratilipi ID %s (lang: %s). Not stored.", workerID, task.ID, task.Language)
 					monitoring.Increment("potential-plagiarism-detected", StatsDClient)
 				}
 			}

@@ -37,7 +37,7 @@ func LoadConfig() (*Config, error) {
 		AWSRegion:            os.Getenv("AWS_REGION"),
 		StoryS3Bucket:        os.Getenv("STORY_S3_BUCKET"),
 		Languages:            []string{"HINDI", "ENGLISH", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
-		NumWorkers:           10,
+		NumWorkers:           100,
 		WorkerChannelSize:    1000,
 		RedisAddr:            os.Getenv("REDIS_ADDR"),
 		RedisPassword:        os.Getenv("REDIS_PASSWORD"),
