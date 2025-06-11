@@ -14,6 +14,7 @@ type Config struct {
 	AWSRegion            string
 	Languages            []string
 	NumWorkers           int
+	WorkerChannelSize    int
 	StoryS3Bucket        string
 	RedisAddr            string
 	RedisPassword        string
@@ -37,6 +38,7 @@ func LoadConfig() (*Config, error) {
 		StoryS3Bucket:        os.Getenv("STORY_S3_BUCKET"),
 		Languages:            []string{"HINDI", "ENGLISH", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
 		NumWorkers:           10,
+		WorkerChannelSize:    1000,
 		RedisAddr:            os.Getenv("REDIS_ADDR"),
 		RedisPassword:        os.Getenv("REDIS_PASSWORD"),
 		RedisDB:              1,

@@ -39,7 +39,7 @@ func main() {
 	}
 	defer redisClient.Close()
 
-	pratilipiTaskChannel := make(chan sources.PratilipiData, 100)
+	pratilipiTaskChannel := make(chan sources.PratilipiData, config.WorkerChannelSize)
 
 	processor, err := sources.NewAthenaProcessor(
 		ctx,
