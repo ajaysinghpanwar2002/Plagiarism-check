@@ -257,11 +257,11 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		}
 
 		query := fmt.Sprintf(
-			"SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED'%s ORDER BY id DESC LIMIT %d OFFSET %d",
+			"SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED'%s ORDER BY id DESC OFFSET %d LIMIT %d",
 			language,
 			dateFilterClause,
-			batchSize,
 			currentQueryOffset,
+			batchSize,
 		)
 
 		log.Printf("Fetching batch for %s with query: %s", language, query)
