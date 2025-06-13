@@ -115,19 +115,64 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 	pipe := rc.client.Pipeline()
 	processedIDs := make([]string, 0, len(batch))
 
-	for i := 0; i < len(batch); i++ {
-		for j := i + 1; j < len(batch); j++ {
-			item1 := batch[i]
-			item2 := batch[j]
+	if len(batch) > 1 {
+		// All items in a batch are expected to have the same language.
+		// If batch is not empty, batch[0].Language can be used.
+		// Ensure batch is not empty before accessing batch[0] if this check is moved earlier.
+		batchLanguage := strings.ToUpper(batch[0].Language)
+		bandMap := make(map[string][]SimhashData) // Maps band identifier to list of items in that band
 
-			if item1.Language == item2.Language {
-				distance := simhash.HammingDistance(item1.Hash, item2.Hash)
+		// 1. Populate bandMap: Group items by their bands
+		for _, item := range batch {
+			for bandIdx := 0; bandIdx < numBands; bandIdx++ {
+				var bandValue uint64
+				if bandIdx < numBands/2 { // First numBands/2 bands from Low part of hash
+					shift := uint(bandIdx * bandBitSize)
+					bandValue = (item.Hash.Low >> shift) & bandMask
+				} else { // Remaining bands from High part of hash
+					shift := uint((bandIdx - numBands/2) * bandBitSize)
+					bandValue = (item.Hash.High >> shift) & bandMask
+				}
+				// Create a unique key for each band bucket (language:band_index:band_value_hex)
+				bucketKey := fmt.Sprintf("%s:%d:%x", batchLanguage, bandIdx, bandValue)
+				bandMap[bucketKey] = append(bandMap[bucketKey], item)
+			}
+		}
 
-				if distance <= hammingDistanceThreshold {
-					log.Printf("IN-BATCH Plagiarism DETECTED for Pratilipi ID %s and %s (lang: %s). Hamming Distance: %d",
-						item1.PratilipiID, item2.PratilipiID, item1.Language, distance)
-					monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
-					pipe.HSet(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(item1.Language)), item1.PratilipiID, item1.PratilipiID).Result()
+		// 2. Compare items within the same LSH buckets
+		comparedPairs := make(map[string]struct{}) // To avoid re-comparing/re-logging identical pairs
+
+		for _, bucketItems := range bandMap {
+			if len(bucketItems) < 2 { // Need at least two items in a bucket to find a pair
+				continue
+			}
+			for i, item1 := range bucketItems {
+				for j := i + 1; j < len(bucketItems); j++ {
+					item2 := bucketItems[j]
+
+					// Create a canonical key for the pair to ensure a pair is processed only once
+					var pairKey string
+					if item1.PratilipiID < item2.PratilipiID {
+						pairKey = item1.PratilipiID + ":" + item2.PratilipiID
+					} else {
+						// item1.PratilipiID should not be equal to item2.PratilipiID if items are distinct
+						pairKey = item2.PratilipiID + ":" + item1.PratilipiID
+					}
+
+					if _, exists := comparedPairs[pairKey]; exists {
+						continue // This pair has already been compared (possibly via another shared band)
+					}
+
+					distance := simhash.HammingDistance(item1.Hash, item2.Hash)
+					if distance <= hammingDistanceThreshold {
+						log.Printf("IN-BATCH Plagiarism DETECTED for Pratilipi ID %s and %s (lang: %s). Hamming Distance: %d",
+							item1.PratilipiID, item2.PratilipiID, item1.Language, distance) // item1.Language is same as batchLanguage (just not ToUpper'd)
+						monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
+
+						plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s", batchLanguage)
+						pipe.HSet(ctx, plagiarismRedisKey, item1.PratilipiID, item1.PratilipiID)
+					}
+					comparedPairs[pairKey] = struct{}{} // Mark this pair as processed
 				}
 			}
 		}
@@ -313,4 +358,3 @@ func (rc *RedisClient) DeleteCheckpointOffset(ctx context.Context, language stri
 	log.Printf("Deleted checkpoint for language %s (if existed)", strings.ToUpper(language))
 	return nil
 }
-
