@@ -23,9 +23,9 @@ const (
 	hammingDistanceThreshold   = 3
 	checkpointKeyFormat        = "plagiarism_detector:checkpoint:athena_fetch_all:%s:offset"
 	checkpointTTL              = 7 * 24 * time.Hour
-	defaultSimhashBatchSize    = 500
+	defaultSimhashBatchSize    = 1000
 	defaultSimhashBatchTimeout = 5 * time.Second
-	simhashChannelCapacity     = 1000
+	simhashChannelCapacity     = 2000
 )
 
 type SimhashData struct {

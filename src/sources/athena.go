@@ -226,7 +226,7 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 	var itemsSentSinceLastSuccessfulCheckpoint int64 = 0
 
 	const batchSize = 50000
-	const checkpointUpdateCountThreshold = 10000
+	const checkpointUpdateCountThreshold = 1000
 
 	defer func() {
 		if itemsSentSinceLastSuccessfulCheckpoint > 0 {
