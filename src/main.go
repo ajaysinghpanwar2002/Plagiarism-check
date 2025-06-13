@@ -74,7 +74,7 @@ func main() {
 					continue
 				}
 
-				hash := simhash.New(content)
+				hash := simhash.New(content, task.Language)
 
 				plagiarismDetected, err := redisClient.CheckAndStoreSimhash(ctx, task.ID, task.Language, hash)
 				if err != nil {

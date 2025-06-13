@@ -20,14 +20,30 @@ func tokenizeUnicode(text string) []string {
 	return words
 }
 
-func New(text string) Simhash {
+func New(text string, language string) Simhash {
 	tokens := tokenizeUnicode(text)
 	if len(tokens) == 0 {
 		return Simhash{Low: 0, High: 0}
 	}
 
-	weights := make(map[string]int, len(tokens))
-	for _, tok := range tokens {
+	stopWords := GetStopWordsMap(language)
+	filteredTokens := make([]string, 0, len(tokens))
+	if stopWords != nil {
+		for _, tok := range tokens {
+			if !stopWords[tok] {
+				filteredTokens = append(filteredTokens, tok)
+			}
+		}
+	} else {
+		filteredTokens = tokens
+	}
+
+	if len(filteredTokens) == 0 {
+		return Simhash{Low: 0, High: 0}
+	}
+
+	weights := make(map[string]int, len(filteredTokens))
+	for _, tok := range filteredTokens {
 		weights[tok]++
 	}
 
