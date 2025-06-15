@@ -3,6 +3,7 @@ package simhash
 import (
 	"crypto/md5"
 	"fmt"
+	"math/bits"
 	"regexp"
 	"strings"
 )
@@ -82,15 +83,7 @@ func (s Simhash) String() string {
 }
 
 func HammingDistance(s1, s2 Simhash) int {
-	popCount := func(n uint64) int {
-		count := 0
-		for n > 0 {
-			n &= (n - 1) // Brian Kernighan's algorithm to count set bits
-			count++
-		}
-		return count
-	}
-	return popCount(s1.Low^s2.Low) + popCount(s1.High^s2.High)
+	return bits.OnesCount64(s1.Low^s2.Low) + bits.OnesCount64(s1.High^s2.High)
 }
 
 func ParseSimhashFromString(s string) (Simhash, error) {
