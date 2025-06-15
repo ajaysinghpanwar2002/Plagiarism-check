@@ -8,6 +8,7 @@ import (
 
 	"plagiarism-detector/src/config"
 	"plagiarism-detector/src/monitoring"
+	"plagiarism-detector/src/moss"
 	"plagiarism-detector/src/simhash"
 	"plagiarism-detector/src/sources"
 	"plagiarism-detector/src/storage"
@@ -76,12 +77,60 @@ func main() {
 
 				hash := simhash.New(content, task.Language)
 
-				plagiarismDetected, err := redisClient.CheckAndStoreSimhash(ctx, task.ID, task.Language, hash)
+				potentialMatchIDs, err := redisClient.CheckPotentialSimhashMatches(ctx, task.ID, task.Language, hash)
 				if err != nil {
-					log.Printf("Worker %d: ERROR processing SimHash for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
-					monitoring.Increment("failed-process-simhash", StatsDClient)
-				} else if plagiarismDetected {
-					monitoring.Increment("potential-plagiarism-detected", StatsDClient)
+					log.Printf("Worker %d: ERROR checking potential SimHash matches for Pratilipi ID %s (lang: %s): %v", workerID, task.ID, task.Language, err)
+					monitoring.Increment("failed-check-potential-simhash", StatsDClient)
+				} else {
+					if len(potentialMatchIDs) > 0 {
+						log.Printf("Worker %d: Potential Simhash matches found for %s: %v. Verifying with MOSS...", workerID, task.ID, potentialMatchIDs)
+						fp1 := moss.GenerateFingerprint(content, config.MossKGramSize, config.MossWindowSize)
+						var mossConfirmed bool = false
+
+						for _, candidateID := range potentialMatchIDs {
+							if candidateID == task.ID {
+								continue
+							}
+							candidateContent, err := s3Downloader.DownloadStoryContent(ctx, candidateID)
+							if err != nil {
+								log.Printf("Worker %d: MOSS Check: Failed to download content for candidate ID %s: %v. Skipping MOSS for this candidate.", workerID, candidateID, err)
+								monitoring.Increment("moss-candidate-download-failed", StatsDClient)
+								continue
+							}
+							if candidateContent == "" {
+								log.Printf("Worker %d: MOSS Check: Empty content for candidate (%s). Skipping MOSS for this candidate.", workerID, candidateID)
+								monitoring.Increment("moss-candidate-content-empty", StatsDClient)
+								continue
+							}
+
+							fp2 := moss.GenerateFingerprint(candidateContent, config.MossKGramSize, config.MossWindowSize)
+							similarity := moss.CalculateSimilarity(fp1, fp2)
+
+							log.Printf("Worker %d: MOSS Check for %s vs %s: Similarity %.2f (Threshold: %.2f)", workerID, task.ID, candidateID, similarity, config.MossSimilarityThreshold)
+
+							if similarity >= config.MossSimilarityThreshold {
+								log.Printf("Worker %d: CONFIRMED PLAGIARISM via MOSS for Pratilipi ID %s (lang: %s). Similar to %s. MOSS Similarity: %.2f",
+									workerID, task.ID, task.Language, candidateID, similarity)
+								monitoring.Increment("moss-confirmed-plagiarism", StatsDClient)
+
+								errStore := redisClient.StoreConfirmedPlagiarism(ctx, task.Language, task.ID, candidateID)
+								if errStore != nil {
+									log.Printf("Worker %d: ERROR storing confirmed plagiarism for %s to %s: %v", workerID, task.ID, candidateID, errStore)
+								}
+								mossConfirmed = true
+								break
+							}
+						}
+
+						if mossConfirmed {
+							log.Printf("Worker %d: Confirmed plagiarism processed for Pratilipi ID %s (lang: %s)", workerID, task.ID, task.Language)
+						} else {
+							log.Printf("Worker %d: No MOSS confirmation for Pratilipi ID %s (lang: %s) despite potential Simhash matches.", workerID, task.ID, task.Language)
+							monitoring.Increment("moss-no-confirmation-for-potential-simhash", StatsDClient)
+						}
+					} else {
+						log.Printf("Worker %d: No potential Simhash matches for %s. Simhash queued.", workerID, task.ID)
+					}
 				}
 			}
 		}(i)

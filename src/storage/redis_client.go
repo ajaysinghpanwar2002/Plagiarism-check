@@ -240,7 +240,7 @@ func (rc *RedisClient) storeSimhashInternal(ctx context.Context, pratilipiID, la
 	return nil
 }
 
-func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, language string, newHash simhash.Simhash) (bool, error) {
+func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratilipiID, language string, newHash simhash.Simhash) ([]string, error) {
 	bucketKeys := make([]string, numBands)
 	if numBands > 0 {
 		for i := 0; i < numBands; i++ {
@@ -256,18 +256,19 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		}
 	}
 
-	var candidateIDs []string
+	var allCandidateIDs []string
 	var err error
 	if len(bucketKeys) > 0 {
-		candidateIDs, err = rc.client.SUnion(ctx, bucketKeys...).Result()
+		allCandidateIDs, err = rc.client.SUnion(ctx, bucketKeys...).Result()
 		if err != nil {
-			return false, fmt.Errorf("failed to get candidate IDs using SUnion for %s: %w", pratilipiID, err)
+			return nil, fmt.Errorf("failed to get candidate IDs using SUnion for %s: %w", pratilipiID, err)
 		}
 	}
 
 	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
+	potentialMatchIDs := []string{}
 
-	for _, candidateID := range candidateIDs {
+	for _, candidateID := range allCandidateIDs {
 		if candidateID == pratilipiID {
 			continue
 		}
@@ -293,10 +294,15 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 		distance := simhash.HammingDistance(newHash, candidateHash)
 
 		if distance <= hammingDistanceThreshold {
-			log.Printf("Potential plagiarism DETECTED for Pratilipi ID %s (lang: %s). Similar to %s. Hamming Distance: %d", pratilipiID, language, candidateID, distance)
-			_, err = rc.client.HSet(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID).Result()
-			return true, nil // Plagiarism detected
+			log.Printf("Potential Simhash match for Pratilipi ID %s (lang: %s) with %s. Hamming Distance: %d.",
+				pratilipiID, language, candidateID, distance)
+			monitoring.Increment("simhash-potential-match-found", rc.statsdClient)
+			potentialMatchIDs = append(potentialMatchIDs, candidateID)
 		}
+	}
+
+	if len(potentialMatchIDs) > 0 {
+		return potentialMatchIDs, nil
 	}
 
 	dataToStore := SimhashData{PratilipiID: pratilipiID, Language: language, Hash: newHash}
@@ -304,9 +310,9 @@ func (rc *RedisClient) CheckAndStoreSimhash(ctx context.Context, pratilipiID, la
 	case rc.simhashBatchChan <- dataToStore:
 	case <-ctx.Done():
 		log.Printf("ERROR: Context cancelled before queuing SimHash for Pratilipi ID %s (lang: %s): %v", pratilipiID, language, ctx.Err())
-		return false, fmt.Errorf("context cancelled before queuing simhash for ID %s: %w", pratilipiID, ctx.Err())
+		return nil, fmt.Errorf("context cancelled before queuing simhash for ID %s: %w", pratilipiID, ctx.Err())
 	}
-	return false, nil
+	return potentialMatchIDs, nil
 }
 
 func (rc *RedisClient) Close() error {
@@ -355,5 +361,18 @@ func (rc *RedisClient) DeleteCheckpointOffset(ctx context.Context, language stri
 		return fmt.Errorf("failed to delete checkpoint offset for language %s from Redis: %w", language, err)
 	}
 	log.Printf("Deleted checkpoint for language %s (if existed)", strings.ToUpper(language))
+	return nil
+}
+
+func (rc *RedisClient) StoreConfirmedPlagiarism(ctx context.Context, language, originalPratilipiID, plagiarizedPratilipiID string) error {
+	confirmedPlagiarismKey := fmt.Sprintf("confirmed_plagiarism:%s", strings.ToUpper(language))
+	_, err := rc.client.HSet(ctx, confirmedPlagiarismKey, originalPratilipiID, plagiarizedPratilipiID).Result()
+	if err != nil {
+		log.Printf("ERROR: Failed to store confirmed plagiarism for %s against %s: %v", originalPratilipiID, plagiarizedPratilipiID, err)
+		monitoring.Increment("failed-store-confirmed-plagiarism", rc.statsdClient)
+		return fmt.Errorf("failed to store confirmed plagiarism for %s to %s: %w", originalPratilipiID, plagiarizedPratilipiID, err)
+	}
+	log.Printf("Stored confirmed plagiarism: %s plagiarized by %s (lang: %s)", originalPratilipiID, plagiarizedPratilipiID, language)
+	monitoring.Increment("stored-confirmed-plagiarism", rc.statsdClient)
 	return nil
 }

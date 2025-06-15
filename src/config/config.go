@@ -8,21 +8,24 @@ import (
 )
 
 type Config struct {
-	AthenaDatabase       string
-	AthenaResultsBucket  string
-	AthenaOutputPrefix   string
-	AWSRegion            string
-	Languages            []string
-	NumWorkers           int
-	WorkerChannelSize    int
-	StoryS3Bucket        string
-	RedisAddr            string
-	RedisPassword        string
-	RedisDB              int
-	StatsDHost           string
-	StatsDPort           string
-	StatsDPrefix         string
-	AthenaFetchStartDate string
+	AthenaDatabase          string
+	AthenaResultsBucket     string
+	AthenaOutputPrefix      string
+	AWSRegion               string
+	Languages               []string
+	NumWorkers              int
+	WorkerChannelSize       int
+	StoryS3Bucket           string
+	RedisAddr               string
+	RedisPassword           string
+	RedisDB                 int
+	StatsDHost              string
+	StatsDPort              string
+	StatsDPrefix            string
+	AthenaFetchStartDate    string
+	MossKGramSize           int
+	MossWindowSize          int
+	MossSimilarityThreshold float64
 }
 
 func LoadConfig() (*Config, error) {
@@ -31,21 +34,24 @@ func LoadConfig() (*Config, error) {
 	}
 
 	config := &Config{
-		AthenaDatabase:       os.Getenv("ATHENA_DATABASE"),
-		AthenaResultsBucket:  os.Getenv("ATHENA_RESULTS_BUCKET"),
-		AthenaOutputPrefix:   os.Getenv("ATHENA_OUTPUT_PREFIX"),
-		AWSRegion:            os.Getenv("AWS_REGION"),
-		StoryS3Bucket:        os.Getenv("STORY_S3_BUCKET"),
-		Languages:            []string{"ENGLISH", "HINDI", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
-		NumWorkers:           16,
-		WorkerChannelSize:    1000,
-		RedisAddr:            os.Getenv("REDIS_ADDR"),
-		RedisPassword:        os.Getenv("REDIS_PASSWORD"),
-		RedisDB:              1,
-		StatsDHost:           os.Getenv("STATSD_HOST"),
-		StatsDPort:           os.Getenv("STATSD_PORT"),
-		StatsDPrefix:         os.Getenv("STATSD_PREFIX"),
-		AthenaFetchStartDate: os.Getenv("ATHENA_FETCH_START_DATE"),
+		AthenaDatabase:          os.Getenv("ATHENA_DATABASE"),
+		AthenaResultsBucket:     os.Getenv("ATHENA_RESULTS_BUCKET"),
+		AthenaOutputPrefix:      os.Getenv("ATHENA_OUTPUT_PREFIX"),
+		AWSRegion:               os.Getenv("AWS_REGION"),
+		StoryS3Bucket:           os.Getenv("STORY_S3_BUCKET"),
+		Languages:               []string{"ENGLISH", "HINDI", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
+		NumWorkers:              16,
+		WorkerChannelSize:       1000,
+		RedisAddr:               os.Getenv("REDIS_ADDR"),
+		RedisPassword:           os.Getenv("REDIS_PASSWORD"),
+		RedisDB:                 1,
+		StatsDHost:              os.Getenv("STATSD_HOST"),
+		StatsDPort:              os.Getenv("STATSD_PORT"),
+		StatsDPrefix:            os.Getenv("STATSD_PREFIX"),
+		AthenaFetchStartDate:    os.Getenv("ATHENA_FETCH_START_DATE"),
+		MossKGramSize:           5,
+		MossWindowSize:          4,
+		MossSimilarityThreshold: 0.3,
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||
