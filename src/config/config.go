@@ -26,6 +26,7 @@ type Config struct {
 	MossKGramSize           int
 	MossWindowSize          int
 	MossSimilarityThreshold float64
+	MinContentLength        int
 }
 
 func LoadConfig() (*Config, error) {
@@ -52,6 +53,7 @@ func LoadConfig() (*Config, error) {
 		MossKGramSize:           5,
 		MossWindowSize:          4,
 		MossSimilarityThreshold: 0.3,
+		MinContentLength:        500,
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||

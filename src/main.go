@@ -75,6 +75,12 @@ func main() {
 					continue
 				}
 
+				if len(content) < config.MinContentLength {
+					log.Printf("Worker %d: Skipping Pratilipi ID %s (lang: %s) due to short content length (%d < %d)", workerID, task.ID, task.Language, len(content), config.MinContentLength)
+					monitoring.Increment("short-content-length", StatsDClient)
+					continue
+				}
+
 				hash := simhash.New(content, task.Language)
 
 				potentialMatchIDs, err := redisClient.CheckPotentialSimhashMatches(ctx, task.ID, task.Language, hash)

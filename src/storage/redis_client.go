@@ -169,13 +169,16 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 					distance := simhash.HammingDistance(item1.Hash, item2.Hash)
 					if distance <= hammingDistanceThreshold {
 						log.Printf("IN-BATCH Plagiarism DETECTED for Pratilipi ID %s and %s (lang: %s). Hamming Distance: %d",
-							item1.PratilipiID, item2.PratilipiID, item1.Language, distance) // item1.Language is same as batchLanguage (just not ToUpper'd)
+							item1.PratilipiID, item2.PratilipiID, item1.Language, distance)
 						monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
 
-						plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s", batchLanguage)
-						pipe.HSet(ctx, plagiarismRedisKey, item1.PratilipiID, item2.PratilipiID)
+						plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s:%s", batchLanguage, item1.PratilipiID)
+						pipe.SAdd(ctx, plagiarismRedisKey, item2.PratilipiID)
+
+						plagiarismRedisKeyReverse := fmt.Sprintf("potential_plagiarism:%s:%s", batchLanguage, item2.PratilipiID)
+						pipe.SAdd(ctx, plagiarismRedisKeyReverse, item1.PratilipiID)
 					}
-					comparedPairs[pairKey] = struct{}{} // Mark this pair as processed
+					comparedPairs[pairKey] = struct{}{}
 				}
 			}
 		}
@@ -300,7 +303,11 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 			log.Printf("Potential Simhash match for Pratilipi ID %s (lang: %s) with %s. Hamming Distance: %d.",
 				pratilipiID, language, candidateID, distance)
 			monitoring.Increment("simhash-potential-match-found", rc.statsdClient)
-			rc.client.HSet(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID)
+
+			lang := strings.ToUpper(language)
+			plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s:%s", lang, pratilipiID)
+			rc.client.SAdd(ctx, plagiarismRedisKey, candidateID)
+
 			potentialMatchIDs = append(potentialMatchIDs, candidateID)
 		}
 	}
