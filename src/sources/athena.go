@@ -290,6 +290,21 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 			case taskChannel <- task:
 				itemsSentThisRun++
 				itemsSentSinceLastSuccessfulCheckpoint++
+				if itemsSentSinceLastSuccessfulCheckpoint >= checkpointUpdateCountThreshold {
+					checkpointValue := initialOffset + itemsSentThisRun
+					log.Printf("Threshold reached: saving checkpoint for %s at %d", language, checkpointValue)
+
+					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					err := a.redisClient.SetCheckpointOffset(ctx, language, checkpointValue)
+					cancel()
+
+					if err != nil {
+						log.Printf("ERROR: failed to set checkpoint at %d: %v", checkpointValue, err)
+					} else {
+						log.Printf("Saved checkpoint for %s at %d", language, checkpointValue)
+						itemsSentSinceLastSuccessfulCheckpoint = 0
+					}
+				}
 			case <-ctx.Done():
 				log.Printf("Context cancelled while sending task for ID %s, language %s.", id, language)
 				return ctx.Err()
@@ -297,23 +312,6 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		}
 
 		currentQueryOffset += int64(len(batchIDs))
-
-		checkpointValueToStore := initialOffset + itemsSentThisRun
-		if itemsSentSinceLastSuccessfulCheckpoint >= checkpointUpdateCountThreshold {
-			log.Printf("Attempting to set checkpoint for %s at offset %d. (Items since last checkpoint: %d)",
-				language, checkpointValueToStore, itemsSentSinceLastSuccessfulCheckpoint)
-
-			checkpointCtx, checkpointCancel := context.WithTimeout(context.Background(), 15*time.Second)
-			err := a.redisClient.SetCheckpointOffset(checkpointCtx, language, checkpointValueToStore)
-			checkpointCancel()
-
-			if err != nil {
-				log.Printf("ERROR: Failed to set checkpoint for %s at offset %d: %v", language, checkpointValueToStore, err)
-			} else {
-				log.Printf("Successfully set checkpoint for %s at offset %d", language, checkpointValueToStore)
-				itemsSentSinceLastSuccessfulCheckpoint = 0 // Reset counter on successful save.
-			}
-		}
 	}
 
 	log.Printf("Finished fetching all IDs for language %s. Total items sent in this run: %d. Effective next offset for resumption: %d.", language, itemsSentThisRun, initialOffset+itemsSentThisRun)
