@@ -149,6 +149,9 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 			for i, item1 := range bucketItems {
 				for j := i + 1; j < len(bucketItems); j++ {
 					item2 := bucketItems[j]
+					if item1.PratilipiID == item2.PratilipiID {
+						continue
+					}
 
 					// Create a canonical key for the pair to ensure a pair is processed only once
 					var pairKey string
@@ -170,7 +173,7 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 						monitoring.Increment("potential-plagiarism-detected", rc.statsdClient)
 
 						plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s", batchLanguage)
-						pipe.HSet(ctx, plagiarismRedisKey, item1.PratilipiID, item1.PratilipiID)
+						pipe.HSet(ctx, plagiarismRedisKey, item1.PratilipiID, item2.PratilipiID)
 					}
 					comparedPairs[pairKey] = struct{}{} // Mark this pair as processed
 				}
