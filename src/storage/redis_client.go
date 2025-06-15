@@ -297,6 +297,7 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 			log.Printf("Potential Simhash match for Pratilipi ID %s (lang: %s) with %s. Hamming Distance: %d.",
 				pratilipiID, language, candidateID, distance)
 			monitoring.Increment("simhash-potential-match-found", rc.statsdClient)
+			rc.client.HSet(ctx, fmt.Sprintf("potential_plagiarism:%s", strings.ToUpper(language)), pratilipiID, candidateID)
 			potentialMatchIDs = append(potentialMatchIDs, candidateID)
 		}
 	}
