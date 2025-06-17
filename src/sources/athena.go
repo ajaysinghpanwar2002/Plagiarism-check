@@ -168,89 +168,83 @@ func (a *AthenaProcessor) processQueryResults(ctx context.Context, queryExecutio
 	return pratilipiIDs, nil
 }
 
-func (a *AthenaProcessor) FetchPublishedPratilipiIDsForTargetDate(ctx context.Context, language string) ([]string, error) {
-	now := time.Now()
-	loc := now.Location()
-
-	targetDate := time.Date(now.Year(), now.Month(), now.Day(), 0, 0, 0, 0, loc)
-
-	if a.fetchStartDate != "" {
-		parsedDate, err := time.Parse("2006-01-02", a.fetchStartDate)
-		if err == nil {
-			targetDate = time.Date(parsedDate.Year(), parsedDate.Month(), parsedDate.Day(), 0, 0, 0, 0, loc)
-		} else {
-			log.Printf("WARN: Invalid ATHENA_FETCH_START_DATE format: '%s'. Expected YYYY-MM-DD. Defaulting to today.", a.fetchStartDate)
-		}
-	}
-
-	queryPeriodStart := targetDate
-	queryPeriodEnd := targetDate.AddDate(0, 0, 1) // Day after targetDate, for exclusive upper bound
-
-	queryPeriodStartStr := queryPeriodStart.Format("2006-01-02 15:04:05")
-	queryPeriodEndStr := queryPeriodEnd.Format("2006-01-02 15:04:05")
-
-	queryFormat := "SELECT id FROM pratilipi_pratilipi WHERE language='%s' AND content_type='PRATILIPI' AND state='PUBLISHED' AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))"
-	query := fmt.Sprintf(queryFormat, language, queryPeriodStartStr, queryPeriodEndStr)
-
-	log.Printf("Executing query for target date %s: %s", targetDate.Format("2006-01-02"), query)
-	return a.executeQueryAndProcess(ctx, query)
-}
-
 func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 	ctx context.Context,
 	language string,
 	taskChannel chan<- PratilipiData,
 ) error {
+	processingDateRedis, dateFoundInRedis, err := a.redisClient.GetProcessingDate(ctx, language)
+	if err != nil {
+		log.Printf("ERROR: Failed to get processing date for %s from Redis: %v. Aborting.", language, err)
+		return fmt.Errorf("failed to get processing date for %s: %w", language, err)
+	}
+
+	var dateToProcess time.Time
+	if dateFoundInRedis {
+		dateToProcess = processingDateRedis
+		log.Printf("Resuming processing for language %s for date %s (from Redis).", language, dateToProcess.Format("2006-01-02"))
+	} else {
+		dateToProcess = time.Now().In(time.UTC).AddDate(0, 0, -1)
+		log.Printf("No processing date found in Redis for %s. Processing data for yesterday: %s.", language, dateToProcess.Format("2006-01-02"))
+	}
+
+	startOfDay := time.Date(dateToProcess.Year(), dateToProcess.Month(), dateToProcess.Day(), 0, 0, 0, 0, time.UTC)
+	endOfDay := startOfDay.AddDate(0, 0, 1)
+	dateFilterClause := fmt.Sprintf(
+		" AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss')) AND published_at < to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))",
+		startOfDay.Format("2006-01-02 15:04:05"),
+		endOfDay.Format("2006-01-02 15:04:05"),
+	)
+	log.Printf("Querying for %s for content published between %s and %s.",
+		language,
+		startOfDay.Format("2006-01-02 15:04:05"),
+		endOfDay.Format("2006-01-02 15:04:05"),
+	)
+
 	initialOffset, err := a.redisClient.GetCheckpointOffset(ctx, language)
 	if err != nil {
-		log.Printf("WARN: Failed to get checkpoint for %s, starting from offset 0: %v", language, err)
+		log.Printf("WARN: Failed to get checkpoint for %s (date %s), starting from offset 0: %v", language, dateToProcess.Format("2006-01-02"), err)
 		initialOffset = 0
 	}
-	log.Printf("Resuming FetchPublishedPratilipiIDs for %s from offset %d", language, initialOffset)
-
-	dateFilterClause := ""
-	if a.fetchStartDate != "" {
-		_, err := time.Parse("2006-01-02", a.fetchStartDate)
-		if err != nil {
-			log.Printf("WARN: Invalid ATHENA_FETCH_START_DATE format '%s'. Expected 'YYYY-MM-DD'. The date filter will NOT be applied.", a.fetchStartDate)
-		} else {
-			startDateForQuery := fmt.Sprintf("%s 00:00:00", a.fetchStartDate)
-			dateFilterClause = fmt.Sprintf(" AND published_at >= to_unixtime(parse_datetime('%s','yyyy-MM-dd HH:mm:ss'))", startDateForQuery)
-			log.Printf("Applying start date filter: fetching content published on or after %s for language %s.", a.fetchStartDate, language)
-			log.Printf("NOTE: Using a start date filter with offset-based checkpointing assumes the set of historical data is stable. If you change the start date, consider deleting the existing Redis checkpoints for this language to force a full re-fetch from the new date.")
-		}
-	}
+	log.Printf("Resuming FetchPublishedPratilipiIDs for %s (date %s) from offset %d", language, dateToProcess.Format("2006-01-02"), initialOffset)
 
 	currentQueryOffset := initialOffset
 	var itemsSentThisRun int64 = 0
 	var itemsSentSinceLastSuccessfulCheckpoint int64 = 0
+	var allBatchesForDayProcessed bool = false
 
 	const batchSize = 50000
 	const checkpointUpdateCountThreshold = 1000
 
 	defer func() {
+		if allBatchesForDayProcessed {
+			// Defer should not save checkpoint for the completed day.
+			log.Printf("Defer: Day %s for language %s completed. Checkpoint management handled by main logic.", dateToProcess.Format("2006-01-02"), language)
+			return
+		}
+
 		if itemsSentSinceLastSuccessfulCheckpoint > 0 {
 			finalCheckpointValue := initialOffset + itemsSentThisRun
-			log.Printf("Attempting to set final checkpoint for %s at offset %d on exit. (Items sent this run: %d, items since last checkpoint: %d)",
-				language, finalCheckpointValue, itemsSentThisRun, itemsSentSinceLastSuccessfulCheckpoint)
+			log.Printf("Defer: Attempting to set final checkpoint for %s (date %s) at offset %d on exit. (Items sent this run: %d, items since last checkpoint: %d)",
+				language, dateToProcess.Format("2006-01-02"), finalCheckpointValue, itemsSentThisRun, itemsSentSinceLastSuccessfulCheckpoint)
 
 			saveCtx, cancelSave := context.WithTimeout(context.Background(), 30*time.Second)
 			defer cancelSave()
 
 			if err := a.redisClient.SetCheckpointOffset(saveCtx, language, finalCheckpointValue); err != nil {
-				log.Printf("ERROR: Failed to set final checkpoint for %s at offset %d: %v", language, finalCheckpointValue, err)
+				log.Printf("Defer ERROR: Failed to set final checkpoint for %s (date %s) at offset %d: %v", language, dateToProcess.Format("2006-01-02"), finalCheckpointValue, err)
 			} else {
-				log.Printf("Successfully set final checkpoint for %s at offset %d on exit", language, finalCheckpointValue)
+				log.Printf("Defer: Successfully set final checkpoint for %s (date %s) at offset %d on exit", language, dateToProcess.Format("2006-01-02"), finalCheckpointValue)
 			}
 		} else if itemsSentThisRun > 0 {
-			log.Printf("No new items processed since last successful checkpoint for %s. Final checkpoint not updated. (Total items sent this run: %d)", language, itemsSentThisRun)
+			log.Printf("Defer: No new items processed since last successful checkpoint for %s (date %s). Final checkpoint not updated. (Total items sent this run: %d)", language, dateToProcess.Format("2006-01-02"), itemsSentThisRun)
 		}
 	}()
 
 	for {
 		select {
 		case <-ctx.Done():
-			log.Printf("Context cancelled, stopping FetchPublishedPratilipiIDs for %s.", language)
+			log.Printf("Context cancelled, stopping FetchPublishedPratilipiIDs for %s (date %s).", language, dateToProcess.Format("2006-01-02"))
 			return ctx.Err()
 		default:
 			// Continue if context is not cancelled.
@@ -264,25 +258,26 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 			batchSize,
 		)
 
-		log.Printf("Fetching batch for %s with query: %s", language, query)
+		log.Printf("Fetching batch for %s (date %s) with query: %s", language, dateToProcess.Format("2006-01-02"), query)
 		batchIDs, err := a.executeQueryAndProcess(ctx, query)
 		if err != nil {
-			log.Printf("ERROR: Failed to execute query for batch (lang: %s, offset: %d): %v. Retrying after delay.", language, currentQueryOffset, err)
+			log.Printf("ERROR: Failed to execute query for batch (lang: %s, date: %s, offset: %d): %v. Retrying after delay.", language, dateToProcess.Format("2006-01-02"), currentQueryOffset, err)
 			select {
 			case <-time.After(10 * time.Second):
 				continue
 			case <-ctx.Done():
-				log.Printf("Context cancelled while waiting to retry query for %s.", language)
+				log.Printf("Context cancelled while waiting to retry query for %s (date %s).", language, dateToProcess.Format("2006-01-02"))
 				return ctx.Err()
 			}
 		}
 
 		if len(batchIDs) == 0 {
-			log.Printf("No more IDs found for %s at offset %d. Fetch completed.", language, currentQueryOffset)
+			log.Printf("No more IDs found for %s for date %s at offset %d. Fetch completed for this date.", language, dateToProcess.Format("2006-01-02"), currentQueryOffset)
+			allBatchesForDayProcessed = true
 			break
 		}
 
-		log.Printf("Fetched %d IDs for %s (offset: %d)", len(batchIDs), language, currentQueryOffset)
+		log.Printf("Fetched %d IDs for %s (date: %s, offset: %d)", len(batchIDs), language, dateToProcess.Format("2006-01-02"), currentQueryOffset)
 
 		for _, id := range batchIDs {
 			task := PratilipiData{ID: id, Language: language}
@@ -292,21 +287,21 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 				itemsSentSinceLastSuccessfulCheckpoint++
 				if itemsSentSinceLastSuccessfulCheckpoint >= checkpointUpdateCountThreshold {
 					checkpointValue := initialOffset + itemsSentThisRun
-					log.Printf("Threshold reached: saving checkpoint for %s at %d", language, checkpointValue)
+					log.Printf("Threshold reached: saving checkpoint for %s (date %s) at %d", language, dateToProcess.Format("2006-01-02"), checkpointValue)
 
-					ctx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
-					err := a.redisClient.SetCheckpointOffset(ctx, language, checkpointValue)
-					cancel()
+					checkpointCtx, cancel := context.WithTimeout(context.Background(), 15*time.Second)
+					err := a.redisClient.SetCheckpointOffset(checkpointCtx, language, checkpointValue)
+					cancel() // Call cancel regardless of error
 
 					if err != nil {
-						log.Printf("ERROR: failed to set checkpoint at %d: %v", checkpointValue, err)
+						log.Printf("ERROR: failed to set checkpoint for %s (date %s) at %d: %v", language, dateToProcess.Format("2006-01-02"), checkpointValue, err)
 					} else {
-						log.Printf("Saved checkpoint for %s at %d", language, checkpointValue)
+						log.Printf("Saved checkpoint for %s (date %s) at %d", language, dateToProcess.Format("2006-01-02"), checkpointValue)
 						itemsSentSinceLastSuccessfulCheckpoint = 0
 					}
 				}
 			case <-ctx.Done():
-				log.Printf("Context cancelled while sending task for ID %s, language %s.", id, language)
+				log.Printf("Context cancelled while sending task for ID %s, language %s (date %s).", id, language, dateToProcess.Format("2006-01-02"))
 				return ctx.Err()
 			}
 		}
@@ -314,6 +309,41 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		currentQueryOffset += int64(len(batchIDs))
 	}
 
-	log.Printf("Finished fetching all IDs for language %s. Total items sent in this run: %d. Effective next offset for resumption: %d.", language, itemsSentThisRun, initialOffset+itemsSentThisRun)
-	return nil
+	if allBatchesForDayProcessed {
+		nextDateToProcess := dateToProcess.AddDate(0, 0, 1)
+		log.Printf("All items for %s on %s processed. Total items sent this run: %d. Attempting to set next processing date to %s and reset offset.",
+			language, dateToProcess.Format("2006-01-02"), itemsSentThisRun, nextDateToProcess.Format("2006-01-02"))
+
+		updateCtx, updateCancel := context.WithTimeout(context.Background(), 30*time.Second)
+		defer updateCancel()
+
+		if err := a.redisClient.SetProcessingDate(updateCtx, language, nextDateToProcess); err != nil {
+			log.Printf("ERROR: Failed to set next processing date for %s to %s: %v. Checkpoint offset NOT reset.", language, nextDateToProcess.Format("2006-01-02"), err)
+			return fmt.Errorf("failed to set next processing date for %s to %s: %w", language, nextDateToProcess.Format("2006-01-02"), err)
+		}
+		log.Printf("Successfully set next processing date for %s to %s.", language, nextDateToProcess.Format("2006-01-02"))
+
+		if err := a.redisClient.SetCheckpointOffset(updateCtx, language, 0); err != nil {
+			log.Printf("ERROR: Failed to reset checkpoint offset to 0 for %s (for next date %s): %v. Next run might re-process data if offset isn't 0.",
+				language, nextDateToProcess.Format("2006-01-02"), err)
+			return fmt.Errorf("failed to reset checkpoint offset for %s for date %s: %w", language, nextDateToProcess.Format("2006-01-02"), err)
+		}
+		log.Printf("Successfully reset checkpoint offset to 0 for %s for next date %s.", language, nextDateToProcess.Format("2006-01-02"))
+
+		itemsSentSinceLastSuccessfulCheckpoint = 0 // Ensure defer doesn't save a stale checkpoint
+
+		log.Printf("Finished fetching all IDs for language %s for date %s. Next processing date set to %s, offset reset to 0.",
+			language, dateToProcess.Format("2006-01-02"), nextDateToProcess.Format("2006-01-02"))
+		return nil
+	}
+
+	// If the loop was exited due to context cancellation or other errors before all batches were processed
+	log.Printf("Fetching IDs for language %s for date %s was interrupted or failed. Total items sent in this run: %d. Effective next offset for resumption (for this date): %d.",
+		language, dateToProcess.Format("2006-01-02"), itemsSentThisRun, initialOffset+itemsSentThisRun)
+
+	if ctx.Err() != nil {
+		return ctx.Err() // Propagate context error
+	}
+
+	return fmt.Errorf("processing for %s on %s did not complete successfully", language, dateToProcess.Format("2006-01-02"))
 }

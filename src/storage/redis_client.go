@@ -26,6 +26,8 @@ const (
 	defaultSimhashBatchSize    = 1000
 	defaultSimhashBatchTimeout = 5 * time.Second
 	simhashChannelCapacity     = 2000
+	processingDateKeyFormat    = "athena_processing_date:%s"
+	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
 )
 
 type SimhashData struct {
@@ -385,5 +387,34 @@ func (rc *RedisClient) StoreConfirmedPlagiarism(ctx context.Context, language, o
 	}
 	log.Printf("Stored confirmed plagiarism: %s plagiarized by %s (lang: %s)", originalPratilipiID, plagiarizedPratilipiID, language)
 	monitoring.Increment("stored-confirmed-plagiarism", rc.statsdClient)
+	return nil
+}
+
+func (rc *RedisClient) GetProcessingDate(ctx context.Context, language string) (time.Time, bool, error) {
+	key := fmt.Sprintf(processingDateKeyFormat, language)
+	dateStr, err := rc.client.Get(ctx, key).Result()
+	if err == redis.Nil {
+		return time.Time{}, false, nil
+	}
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("redis GetProcessingDate for %s: %w", language, err)
+	}
+
+	// Dates are stored and read as UTC.
+	parsedDate, err := time.ParseInLocation(redisDateFormat, dateStr, time.UTC)
+	if err != nil {
+		return time.Time{}, false, fmt.Errorf("redis ParseProcessingDate '%s' for %s: %w", dateStr, language, err)
+	}
+	return parsedDate, true, nil
+}
+
+func (rc *RedisClient) SetProcessingDate(ctx context.Context, language string, dateToSet time.Time) error {
+	key := fmt.Sprintf(processingDateKeyFormat, language)
+	dateStr := dateToSet.In(time.UTC).Format(redisDateFormat)
+
+	err := rc.client.Set(ctx, key, dateStr, 0).Err() 
+	if err != nil {
+		return fmt.Errorf("redis SetProcessingDate for %s to %s: %w", language, dateStr, err)
+	}
 	return nil
 }
