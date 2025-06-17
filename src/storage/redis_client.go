@@ -23,9 +23,9 @@ const (
 	hammingDistanceThreshold   = 3
 	checkpointKeyFormat        = "plagiarism_detector:checkpoint:athena_fetch_all:%s:offset"
 	checkpointTTL              = 7 * 24 * time.Hour
-	defaultSimhashBatchSize    = 1000
+	defaultSimhashBatchSize    = 250
 	defaultSimhashBatchTimeout = 5 * time.Second
-	simhashChannelCapacity     = 2000
+	simhashChannelCapacity     = 500
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
 )
