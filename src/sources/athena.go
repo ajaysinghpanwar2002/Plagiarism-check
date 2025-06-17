@@ -317,18 +317,18 @@ func (a *AthenaProcessor) FetchPublishedPratilipiIDs(
 		updateCtx, updateCancel := context.WithTimeout(context.Background(), 30*time.Second)
 		defer updateCancel()
 
-		if err := a.redisClient.SetProcessingDate(updateCtx, language, nextDateToProcess); err != nil {
-			log.Printf("ERROR: Failed to set next processing date for %s to %s: %v. Checkpoint offset NOT reset.", language, nextDateToProcess.Format("2006-01-02"), err)
-			return fmt.Errorf("failed to set next processing date for %s to %s: %w", language, nextDateToProcess.Format("2006-01-02"), err)
-		}
-		log.Printf("Successfully set next processing date for %s to %s.", language, nextDateToProcess.Format("2006-01-02"))
-
 		if err := a.redisClient.SetCheckpointOffset(updateCtx, language, 0); err != nil {
 			log.Printf("ERROR: Failed to reset checkpoint offset to 0 for %s (for next date %s): %v. Next run might re-process data if offset isn't 0.",
 				language, nextDateToProcess.Format("2006-01-02"), err)
 			return fmt.Errorf("failed to reset checkpoint offset for %s for date %s: %w", language, nextDateToProcess.Format("2006-01-02"), err)
 		}
 		log.Printf("Successfully reset checkpoint offset to 0 for %s for next date %s.", language, nextDateToProcess.Format("2006-01-02"))
+
+		if err := a.redisClient.SetProcessingDate(updateCtx, language, nextDateToProcess); err != nil {
+			log.Printf("ERROR: Failed to set next processing date for %s to %s: %v. Checkpoint offset NOT reset.", language, nextDateToProcess.Format("2006-01-02"), err)
+			return fmt.Errorf("failed to set next processing date for %s to %s: %w", language, nextDateToProcess.Format("2006-01-02"), err)
+		}
+		log.Printf("Successfully set next processing date for %s to %s.", language, nextDateToProcess.Format("2006-01-02"))
 
 		itemsSentSinceLastSuccessfulCheckpoint = 0 // Ensure defer doesn't save a stale checkpoint
 
