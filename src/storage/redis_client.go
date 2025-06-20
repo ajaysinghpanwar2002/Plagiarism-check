@@ -291,9 +291,9 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		}
 	}
 
-	if len(potentialMatchIDs) > 0 {
-		return potentialMatchIDs, nil
-	}
+	// if len(potentialMatchIDs) > 0 {
+	// 	return potentialMatchIDs, nil
+	// }
 
 	dataToStore := SimhashData{PratilipiID: pratilipiID, Language: language, Hash: newHash}
 	select {
