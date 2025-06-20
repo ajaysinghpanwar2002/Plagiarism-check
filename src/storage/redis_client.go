@@ -217,37 +217,6 @@ func (rc *RedisClient) flushSimhashBatch(ctx context.Context, batch []SimhashDat
 	return nil
 }
 
-// It performs the actual storage of the simhash and its bands
-func (rc *RedisClient) storeSimhashInternal(ctx context.Context, pratilipiID, language string, hash simhash.Simhash) error {
-	pipe := rc.client.Pipeline()
-
-	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
-	pipe.HSet(ctx, fullHashKey, pratilipiID, hash.String())
-
-	for i := 0; i < numBands; i++ {
-		var bandValue uint64
-		if i < numBands/2 { // First 4 bands from Low
-			shift := uint(i * bandBitSize)
-			bandValue = (hash.Low >> shift) & bandMask
-		} else { // Next 4 bands from High
-			shift := uint((i - numBands/2) * bandBitSize)
-			bandValue = (hash.High >> shift) & bandMask
-		}
-
-		bucketKey := fmt.Sprintf("%s:%d:%x", strings.ToUpper(language), i, bandValue)
-		pipe.SAdd(ctx, bucketKey, pratilipiID)
-	}
-
-	_, err := pipe.Exec(ctx)
-	if err != nil {
-		monitoring.Increment("failed-store-simhash", rc.statsdClient)
-		return fmt.Errorf("failed to execute Redis pipeline for storing simhash for ID %s: %w", pratilipiID, err)
-	}
-	log.Printf("Successfully stored SimHash for Pratilipi ID %s (lang: %s) in Redis", pratilipiID, language)
-	monitoring.Increment("stored-simhash", rc.statsdClient)
-	return nil
-}
-
 func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratilipiID, language string, newHash simhash.Simhash) ([]string, error) {
 	bucketKeys := make([]string, numBands)
 	if numBands > 0 {
