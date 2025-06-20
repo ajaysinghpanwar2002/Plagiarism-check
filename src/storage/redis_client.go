@@ -264,19 +264,27 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		}
 	}
 
-	var allCandidateIDs []string
-	var err error
-	if len(bucketKeys) > 0 {
-		allCandidateIDs, err = rc.client.SUnion(ctx, bucketKeys...).Result()
+	allCandidateIDs := make(map[string]struct{})
+	if len(bucketKeys) == 0 {
+		log.Printf("WARN: No bucket keys generated for language %s. Skipping potential match check for Pratilipi ID %s.", language, pratilipiID)
+		return nil, nil
+	}
+	for i, bandValue := range bucketKeys {
+		bucketKey := fmt.Sprintf("%s:%d:%s", language, i, bandValue)
+		memberIDs, err := rc.client.SMembers(ctx, bucketKey).Result()
 		if err != nil {
-			return nil, fmt.Errorf("failed to get candidate IDs using SUnion for %s: %w", pratilipiID, err)
+			continue
+		}
+
+		for _, id := range memberIDs {
+			allCandidateIDs[id] = struct{}{}
 		}
 	}
 
 	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
 	potentialMatchIDs := []string{}
 
-	for _, candidateID := range allCandidateIDs {
+	for candidateID := range allCandidateIDs {
 		if candidateID == pratilipiID {
 			continue
 		}
@@ -412,7 +420,7 @@ func (rc *RedisClient) SetProcessingDate(ctx context.Context, language string, d
 	key := fmt.Sprintf(processingDateKeyFormat, language)
 	dateStr := dateToSet.In(time.UTC).Format(redisDateFormat)
 
-	err := rc.client.Set(ctx, key, dateStr, 0).Err() 
+	err := rc.client.Set(ctx, key, dateStr, 0).Err()
 	if err != nil {
 		return fmt.Errorf("redis SetProcessingDate for %s to %s: %w", language, dateStr, err)
 	}
