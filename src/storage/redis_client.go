@@ -269,10 +269,10 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		log.Printf("WARN: No bucket keys generated for language %s. Skipping potential match check for Pratilipi ID %s.", language, pratilipiID)
 		return nil, nil
 	}
-	for i, bandValue := range bucketKeys {
-		bucketKey := fmt.Sprintf("%s:%d:%s", language, i, bandValue)
+	for _, bucketKey := range bucketKeys {
 		memberIDs, err := rc.client.SMembers(ctx, bucketKey).Result()
 		if err != nil {
+			log.Printf("WARN: Failed to get members for bucket %s: %v", bucketKey, err)
 			continue
 		}
 
