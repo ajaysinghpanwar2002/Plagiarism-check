@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 	"log"
+	"sort"
 	"strconv"
 	"strings"
 	"sync"
@@ -28,12 +29,19 @@ const (
 	simhashChannelCapacity     = 500
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
+	maxCandidatesToCheck       = 2000
+	sscanChunkSize             = 100
 )
 
 type SimhashData struct {
 	PratilipiID string
 	Language    string
 	Hash        simhash.Simhash
+}
+
+type bucketInfo struct {
+	key  string
+	size int64
 }
 
 type RedisClient struct {
@@ -238,15 +246,43 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		log.Printf("WARN: No bucket keys generated for language %s. Skipping potential match check for Pratilipi ID %s.", language, pratilipiID)
 		return nil, nil
 	}
-	for _, bucketKey := range bucketKeys {
-		memberIDs, err := rc.client.SMembers(ctx, bucketKey).Result()
+
+	var bucketInfos []bucketInfo
+
+	for _, bk := range bucketKeys {
+		sz, err := rc.client.SCard(ctx, bk).Result()
 		if err != nil {
-			log.Printf("WARN: Failed to get members for bucket %s: %v", bucketKey, err)
+			log.Printf("WARN: Failed to get size for bucket %s: %v", bk, err)
 			continue
 		}
+		bucketInfos = append(bucketInfos, bucketInfo{key: bk, size: sz})
+	}
 
-		for _, id := range memberIDs {
-			allCandidateIDs[id] = struct{}{}
+	sort.Slice(bucketInfos, func(i, j int) bool {
+		return bucketInfos[i].size < bucketInfos[j].size
+	})
+
+	for _, binfo := range bucketInfos {
+		if len(allCandidateIDs) >= maxCandidatesToCheck {
+			break
+		}
+		var cursor uint64
+		for {
+			members, newCursor, err := rc.client.SScan(ctx, binfo.key, cursor, "", sscanChunkSize).Result()
+			if err != nil {
+				log.Printf("WARN: Failed to scan members for bucket %s: %v", binfo.key, err)
+				break
+			}
+			for _, id := range members {
+				allCandidateIDs[id] = struct{}{}
+				if len(allCandidateIDs) >= maxCandidatesToCheck {
+					break
+				}
+			}
+			if newCursor == 0 || len(allCandidateIDs) >= maxCandidatesToCheck {
+				break
+			}
+			cursor = newCursor
 		}
 	}
 
