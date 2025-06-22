@@ -28,6 +28,14 @@ func Increment(name string, client statsd.Statter) {
 	}
 }
 
+func IncrementWithTags(name string, client statsd.Statter, language string) {
+	tag := statsd.Tag{"language", language}
+	err := client.Inc(name, 1, 1.0, tag)
+	if err != nil {
+		fmt.Println(err)
+	}
+}
+
 func Timing(name string, client statsd.Statter, timing time.Time, tags ...statsd.Tag) {
 	delta := time.Since(timing).Milliseconds()
 	err := client.Timing(name, delta, 1.0, tags...)

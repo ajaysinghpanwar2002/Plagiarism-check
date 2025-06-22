@@ -117,8 +117,7 @@ func main() {
 							if similarity >= config.MossSimilarityThreshold {
 								log.Printf("Worker %d: CONFIRMED PLAGIARISM via MOSS for Pratilipi ID %s (lang: %s). Similar to %s. MOSS Similarity: %.2f",
 									workerID, task.ID, task.Language, candidateID, similarity)
-								monitoring.Increment("moss-confirmed-plagiarism", StatsDClient)
-
+								monitoring.IncrementWithTags("moss-confirmed-plagiarism-for-language", StatsDClient, task.Language)
 								errStore := redisClient.StoreConfirmedPlagiarism(ctx, task.Language, task.ID, candidateID)
 								if errStore != nil {
 									log.Printf("Worker %d: ERROR storing confirmed plagiarism for %s to %s: %v", workerID, task.ID, candidateID, errStore)
