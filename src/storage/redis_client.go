@@ -317,7 +317,7 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		if distance <= hammingDistanceThreshold {
 			log.Printf("Potential Simhash match for Pratilipi ID %s (lang: %s) with %s. Hamming Distance: %d.",
 				pratilipiID, language, candidateID, distance)
-			monitoring.Increment("simhash-potential-match-found", rc.statsdClient)
+			monitoring.IncrementWithTags("simhash-potential-match-found-language", rc.statsdClient, language)
 
 			lang := strings.ToUpper(language)
 			plagiarismRedisKey := fmt.Sprintf("potential_plagiarism:%s:%s", lang, pratilipiID)
