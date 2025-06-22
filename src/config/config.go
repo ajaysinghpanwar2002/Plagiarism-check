@@ -50,9 +50,9 @@ func LoadConfig() (*Config, error) {
 		StatsDPort:              os.Getenv("STATSD_PORT"),
 		StatsDPrefix:            os.Getenv("STATSD_PREFIX"),
 		AthenaFetchStartDate:    os.Getenv("ATHENA_FETCH_START_DATE"),
-		MossKGramSize:           5,
-		MossWindowSize:          4,
-		MossSimilarityThreshold: 0.3,
+		MossKGramSize:           4,
+		MossWindowSize:          3,
+		MossSimilarityThreshold: 0.25,
 		MinContentLength:        500,
 	}
 
