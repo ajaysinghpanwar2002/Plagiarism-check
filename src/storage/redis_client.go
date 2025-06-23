@@ -391,8 +391,16 @@ func (rc *RedisClient) DeleteCheckpointOffset(ctx context.Context, language stri
 }
 
 func (rc *RedisClient) StoreConfirmedPlagiarism(ctx context.Context, language, originalPratilipiID, plagiarizedPratilipiID string) error {
-	confirmedPlagiarismKey := fmt.Sprintf("confirmed_plagiarism:%s", strings.ToUpper(language))
-	_, err := rc.client.HSet(ctx, confirmedPlagiarismKey, originalPratilipiID, plagiarizedPratilipiID).Result()
+	processingDate, exists, err := rc.GetProcessingDate(ctx, language)
+	if err != nil {
+		log.Printf("ERROR: Failed to get processing date for language %s: %v. Using previous day as default.", language, err)
+		processingDate = time.Now().AddDate(0, 0, -1)
+	} else if !exists {
+		processingDate = time.Now().AddDate(0, 0, -1)
+	}
+	dateStr := processingDate.In(time.UTC).Format(redisDateFormat)
+	confirmedPlagiarismKey := fmt.Sprintf("confirmed_plagiarism:%s:%s", strings.ToUpper(language), dateStr)
+	_, err = rc.client.HSet(ctx, confirmedPlagiarismKey, originalPratilipiID, plagiarizedPratilipiID).Result()
 	if err != nil {
 		log.Printf("ERROR: Failed to store confirmed plagiarism for %s against %s: %v", originalPratilipiID, plagiarizedPratilipiID, err)
 		monitoring.Increment("failed-store-confirmed-plagiarism", rc.statsdClient)
