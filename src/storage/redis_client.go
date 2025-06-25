@@ -30,7 +30,7 @@ const (
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
 	maxCandidatesToCheck       = 25000
-	sscanChunkSize             = 100
+	sscanChunkSize             = 500
 )
 
 type SimhashData struct {
