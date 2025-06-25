@@ -30,6 +30,9 @@ const (
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
 	sscanChunkSize             = 500
+	smallBucketThreshold       = 5000 // Candidates from buckets smaller than this are processed directly.
+	largeBucketIntersectCount  = 2    // We will try to intersect this many of the smallest "large" buckets.
+	randomSampleCount          = 1000 // Fallback sample size for extremely large buckets.
 )
 
 var maxCandidatesToCheck = 25000
@@ -242,67 +245,128 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		}
 	}
 
-	allCandidateIDs := make(map[string]struct{})
-	if len(bucketKeys) == 0 {
-		log.Printf("WARN: No bucket keys generated for language %s. Skipping potential match check for Pratilipi ID %s.", language, pratilipiID)
-		return nil, nil
-	}
-
 	var bucketInfos []bucketInfo
 
-	for _, bk := range bucketKeys {
-		sz, err := rc.client.SCard(ctx, bk).Result()
+	pipe := rc.client.Pipeline()
+	cmds := make([]*redis.IntCmd, len(bucketKeys))
+	for i, bk := range bucketKeys {
+		cmds[i] = pipe.SCard(ctx, bk)
+	}
+	_, err := pipe.Exec(ctx)
+	if err != nil && err != redis.Nil {
+		log.Printf("ERROR: Failed to execute SCARD pipeline for %s: %v", pratilipiID, err)
+		return nil, err
+	}
+
+	for i, cmd := range cmds {
+		size, err := cmd.Result()
 		if err != nil {
-			log.Printf("WARN: Failed to get size for bucket %s: %v", bk, err)
+			log.Printf("WARN: Failed to get size for bucket %s: %v", bucketKeys[i], err)
 			continue
 		}
-		bucketInfos = append(bucketInfos, bucketInfo{key: bk, size: sz})
+		if size > 0 {
+			bucketInfos = append(bucketInfos, bucketInfo{key: bucketKeys[i], size: size})
+		}
 	}
 
 	sort.Slice(bucketInfos, func(i, j int) bool {
 		return bucketInfos[i].size < bucketInfos[j].size
 	})
 
-	totalKeys := 0
-	for _, binfo := range bucketInfos {
-		totalKeys += int(binfo.size)
-	}
-
-	// only process the smallest 4 buckets.
-	// As Our hamming distance threshold is 3, we can safely ignore larger buckets.
-	// This is a heuristic to reduce the number of candidates we check.
-	if len(bucketInfos) > 4 && totalKeys > maxCandidatesToCheck {
-		bucketInfos = bucketInfos[:4]
-	}
-
-	// if language is tamil, we can have lower maxCandidatesToCheck (we are observing high false positive rate for tamil)
+	candidateBudget := 25000
 	if strings.ToLower(language) == "tamil" {
-		maxCandidatesToCheck = 2000
+		candidateBudget = 5000 // We can afford a larger budget with the new intelligent strategy.
 	}
 
+	allCandidateIDs := make(map[string]struct{})
+
+	// process small buckets.
+	var largeBuckets []bucketInfo
 	for _, binfo := range bucketInfos {
-		if len(allCandidateIDs) >= maxCandidatesToCheck {
-			break
-		}
-		var cursor uint64
-		for {
-			members, newCursor, err := rc.client.SScan(ctx, binfo.key, cursor, "", sscanChunkSize).Result()
-			if err != nil {
-				log.Printf("WARN: Failed to scan members for bucket %s: %v", binfo.key, err)
+		if binfo.size < smallBucketThreshold {
+			if len(allCandidateIDs) >= candidateBudget {
 				break
 			}
-			for _, id := range members {
-				allCandidateIDs[id] = struct{}{}
-				if len(allCandidateIDs) >= maxCandidatesToCheck {
+			var cursor uint64
+			for {
+				members, newCursor, err := rc.client.SScan(ctx, binfo.key, cursor, "", sscanChunkSize).Result()
+				if err != nil {
+					log.Printf("WARN: Failed to scan members for small bucket %s: %v", binfo.key, err)
 					break
 				}
+				for _, id := range members {
+					allCandidateIDs[id] = struct{}{}
+				}
+				if newCursor == 0 {
+					break
+				}
+				cursor = newCursor
 			}
-			if newCursor == 0 || len(allCandidateIDs) >= maxCandidatesToCheck {
+		} else {
+			largeBuckets = append(largeBuckets, binfo)
+		}
+	}
+
+	// intersect smallest large buckets.
+	if len(largeBuckets) >= largeBucketIntersectCount && len(allCandidateIDs) < candidateBudget {
+		smallLargeBucket := largeBuckets[0]
+		nextLargeBucket := largeBuckets[1]
+		log.Printf("Performing client-side intersection for %s on buckets %s (%d) and %s (%d)",
+			pratilipiID, smallLargeBucket.key, smallLargeBucket.size, nextLargeBucket.key, nextLargeBucket.size)
+
+		var cursor uint64
+		for {
+			members, newCursor, err := rc.client.SScan(ctx, smallLargeBucket.key, cursor, "", sscanChunkSize).Result()
+			if err != nil {
+				log.Printf("WARN: SScan failed on bucket %s during intersection: %v", smallLargeBucket.key, err)
+				break
+			}
+
+			if len(members) > 0 {
+				pipe := rc.client.Pipeline()
+				results := make([]*redis.BoolCmd, len(members))
+				for i, member := range members {
+					results[i] = pipe.SIsMember(ctx, nextLargeBucket.key, member)
+				}
+				_, err := pipe.Exec(ctx)
+				if err != nil && err != redis.Nil {
+					log.Printf("WARN: SIsMember pipeline failed during intersection: %v", err)
+				}
+
+				for i, resCmd := range results {
+					isMember, _ := resCmd.Result()
+					if isMember {
+						allCandidateIDs[members[i]] = struct{}{} // Found in both! Add to candidates.
+					}
+				}
+			}
+
+			if newCursor == 0 || len(allCandidateIDs) >= candidateBudget {
 				break
 			}
 			cursor = newCursor
 		}
 	}
+
+	// Fallback for Extremely Large Buckets (if budget still remains)
+	if len(allCandidateIDs) < 50 && len(bucketInfos) > 0 {
+		// Let's use probabilistic sampling on the largest bucket as a last resort
+		largestBucket := bucketInfos[len(bucketInfos)-1]
+		if largestBucket.size > smallBucketThreshold*2 {
+			log.Printf("Low candidates, performing random sampling on largest bucket %s (%d)", largestBucket.key, largestBucket.size)
+
+			sampledMembers, err := rc.client.SRandMemberN(ctx, largestBucket.key, randomSampleCount).Result()
+			if err != nil {
+				log.Printf("WARN: SRandMemberN failed for bucket %s: %v", largestBucket.key, err)
+			} else {
+				for _, member := range sampledMembers {
+					allCandidateIDs[member] = struct{}{}
+				}
+			}
+		}
+	}
+
+	log.Printf("Processing %d final candidates for Pratilipi ID %s (lang: %s)", len(allCandidateIDs), pratilipiID, language)
 
 	fullHashKey := fmt.Sprintf("simhashes:%s", strings.ToUpper(language))
 	potentialMatchIDs := []string{}
@@ -344,10 +408,6 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 			potentialMatchIDs = append(potentialMatchIDs, candidateID)
 		}
 	}
-
-	// if len(potentialMatchIDs) > 0 {
-	// 	return potentialMatchIDs, nil
-	// }
 
 	dataToStore := SimhashData{PratilipiID: pratilipiID, Language: language, Hash: newHash}
 	select {

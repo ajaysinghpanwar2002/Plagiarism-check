@@ -3,3 +3,4 @@ tasks.md
 .DS_Store
 src/local-testing
 logs/
+context.txt
