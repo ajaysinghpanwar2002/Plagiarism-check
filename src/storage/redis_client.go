@@ -31,7 +31,7 @@ const (
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
 	sscanChunkSize             = 500
 	smallBucketThreshold       = 5000 // Candidates from buckets smaller than this are processed directly.
-	largeBucketIntersectCount  = 2    // We will try to intersect this many of the smallest "large" buckets.
+	intersectionPoolSize       = 5
 	randomSampleCount          = 1000 // Fallback sample size for extremely large buckets.
 )
 
@@ -275,76 +275,71 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 
 	candidateBudget := 25000
 	if strings.ToLower(language) == "tamil" {
-		candidateBudget = 5000 // We can afford a larger budget with the new intelligent strategy.
+		candidateBudget = 10000
 	}
 
 	allCandidateIDs := make(map[string]struct{})
 
-	// process small buckets.
-	var largeBuckets []bucketInfo
-	for _, binfo := range bucketInfos {
-		if binfo.size < smallBucketThreshold {
+	poolEnd := intersectionPoolSize
+	if len(bucketInfos) < poolEnd {
+		poolEnd = len(bucketInfos)
+	}
+
+	for i := 0; i < poolEnd; i++ {
+		for j := i + 1; j < poolEnd; j++ {
 			if len(allCandidateIDs) >= candidateBudget {
 				break
 			}
+
+			// To be efficient, we always scan the smaller bucket and check against the larger one.
+			bucketA := bucketInfos[i]
+			bucketB := bucketInfos[j]
+
+			smallerBucket := bucketA
+			largerBucket := bucketB
+			if bucketA.size > bucketB.size {
+				smallerBucket = bucketB
+				largerBucket = bucketA
+			}
+
+			log.Printf("Intersecting buckets for %s: %s (%d) and %s (%d)",
+				pratilipiID, smallerBucket.key, smallerBucket.size, largerBucket.key, largerBucket.size)
+
 			var cursor uint64
 			for {
-				members, newCursor, err := rc.client.SScan(ctx, binfo.key, cursor, "", sscanChunkSize).Result()
+				members, newCursor, err := rc.client.SScan(ctx, smallerBucket.key, cursor, "", sscanChunkSize).Result()
 				if err != nil {
-					log.Printf("WARN: Failed to scan members for small bucket %s: %v", binfo.key, err)
+					log.Printf("WARN: SScan failed on bucket %s during intersection: %v", smallerBucket.key, err)
 					break
 				}
-				for _, id := range members {
-					allCandidateIDs[id] = struct{}{}
+
+				if len(members) > 0 {
+					checkPipe := rc.client.Pipeline()
+					results := make([]*redis.BoolCmd, len(members))
+					for k, member := range members {
+						results[k] = checkPipe.SIsMember(ctx, largerBucket.key, member)
+					}
+					_, err := checkPipe.Exec(ctx)
+					if err != nil && err != redis.Nil {
+						log.Printf("WARN: SIsMember pipeline failed during intersection: %v", err)
+					}
+
+					for k, resCmd := range results {
+						isMember, _ := resCmd.Result()
+						if isMember {
+							allCandidateIDs[members[k]] = struct{}{} // Found in both! Add to candidates.
+						}
+					}
 				}
-				if newCursor == 0 {
+
+				if newCursor == 0 || len(allCandidateIDs) >= candidateBudget {
 					break
 				}
 				cursor = newCursor
 			}
-		} else {
-			largeBuckets = append(largeBuckets, binfo)
 		}
-	}
-
-	// intersect smallest large buckets.
-	if len(largeBuckets) >= largeBucketIntersectCount && len(allCandidateIDs) < candidateBudget {
-		smallLargeBucket := largeBuckets[0]
-		nextLargeBucket := largeBuckets[1]
-		log.Printf("Performing client-side intersection for %s on buckets %s (%d) and %s (%d)",
-			pratilipiID, smallLargeBucket.key, smallLargeBucket.size, nextLargeBucket.key, nextLargeBucket.size)
-
-		var cursor uint64
-		for {
-			members, newCursor, err := rc.client.SScan(ctx, smallLargeBucket.key, cursor, "", sscanChunkSize).Result()
-			if err != nil {
-				log.Printf("WARN: SScan failed on bucket %s during intersection: %v", smallLargeBucket.key, err)
-				break
-			}
-
-			if len(members) > 0 {
-				pipe := rc.client.Pipeline()
-				results := make([]*redis.BoolCmd, len(members))
-				for i, member := range members {
-					results[i] = pipe.SIsMember(ctx, nextLargeBucket.key, member)
-				}
-				_, err := pipe.Exec(ctx)
-				if err != nil && err != redis.Nil {
-					log.Printf("WARN: SIsMember pipeline failed during intersection: %v", err)
-				}
-
-				for i, resCmd := range results {
-					isMember, _ := resCmd.Result()
-					if isMember {
-						allCandidateIDs[members[i]] = struct{}{} // Found in both! Add to candidates.
-					}
-				}
-			}
-
-			if newCursor == 0 || len(allCandidateIDs) >= candidateBudget {
-				break
-			}
-			cursor = newCursor
+		if len(allCandidateIDs) >= candidateBudget {
+			break
 		}
 	}
 
