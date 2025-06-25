@@ -29,9 +29,10 @@ const (
 	simhashChannelCapacity     = 500
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
-	maxCandidatesToCheck       = 25000
 	sscanChunkSize             = 500
 )
+
+var maxCandidatesToCheck = 25000
 
 type SimhashData struct {
 	PratilipiID string
@@ -262,7 +263,7 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 		return bucketInfos[i].size < bucketInfos[j].size
 	})
 
-	totalKeys := 0 
+	totalKeys := 0
 	for _, binfo := range bucketInfos {
 		totalKeys += int(binfo.size)
 	}
@@ -272,6 +273,11 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 	// This is a heuristic to reduce the number of candidates we check.
 	if len(bucketInfos) > 4 && totalKeys > maxCandidatesToCheck {
 		bucketInfos = bucketInfos[:4]
+	}
+
+	// if language is tamil, we can have lower maxCandidatesToCheck (we are observing high false positive rate for tamil)
+	if strings.ToLower(language) == "tamil" {
+		maxCandidatesToCheck = 2000
 	}
 
 	for _, binfo := range bucketInfos {
