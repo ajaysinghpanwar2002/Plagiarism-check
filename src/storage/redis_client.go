@@ -29,7 +29,7 @@ const (
 	simhashChannelCapacity     = 500
 	processingDateKeyFormat    = "athena_processing_date:%s"
 	redisDateFormat            = "2006-01-02" // stores dates in YYYY-MM-DD format
-	maxCandidatesToCheck       = 2000
+	maxCandidatesToCheck       = 25000
 	sscanChunkSize             = 100
 )
 
@@ -261,6 +261,18 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 	sort.Slice(bucketInfos, func(i, j int) bool {
 		return bucketInfos[i].size < bucketInfos[j].size
 	})
+
+	totalKeys := 0 
+	for _, binfo := range bucketInfos {
+		totalKeys += int(binfo.size)
+	}
+
+	// only process the smallest 4 buckets.
+	// As Our hamming distance threshold is 3, we can safely ignore larger buckets.
+	// This is a heuristic to reduce the number of candidates we check.
+	if len(bucketInfos) > 4 && totalKeys > maxCandidatesToCheck {
+		bucketInfos = bucketInfos[:4]
+	}
 
 	for _, binfo := range bucketInfos {
 		if len(allCandidateIDs) >= maxCandidatesToCheck {
