@@ -40,7 +40,7 @@ func LoadConfig() (*Config, error) {
 		AthenaOutputPrefix:      os.Getenv("ATHENA_OUTPUT_PREFIX"),
 		AWSRegion:               os.Getenv("AWS_REGION"),
 		StoryS3Bucket:           os.Getenv("STORY_S3_BUCKET"),
-		Languages:               []string{"ENGLISH", "HINDI", "TAMIL", "TELUGU", "KANNADA", "MALAYALAM", "BENGALI", "MARATHI", "GUJARATI", "ODIA", "PUNJABI"},
+		Languages:               []string{"PUNJABI", "ODIA", "ENGLISH", "GUJARATI", "MALAYALAM", "KANNADA", "TELUGU", "TAMIL", "MARATHI", "BENGALI", "HINDI"},
 		NumWorkers:              8,
 		WorkerChannelSize:       400,
 		RedisAddr:               os.Getenv("REDIS_ADDR"),
