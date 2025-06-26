@@ -33,6 +33,7 @@ const (
 	smallBucketThreshold       = 5000 // Candidates from buckets smaller than this are processed directly.
 	intersectionPoolSize       = 5
 	randomSampleCount          = 1000 // Fallback sample size for extremely large buckets.
+	candidateSourcePoolSize    = 5
 )
 
 var maxCandidatesToCheck = 25000
@@ -279,68 +280,62 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 	}
 
 	allCandidateIDs := make(map[string]struct{})
+	candidateCounts := make(map[string]int)
 
-	poolEnd := intersectionPoolSize
+	poolEnd := candidateSourcePoolSize
 	if len(bucketInfos) < poolEnd {
 		poolEnd = len(bucketInfos)
 	}
 
+	// Scan each bucket in the pool ONCE and count occurrences of each ID.
 	for i := 0; i < poolEnd; i++ {
-		for j := i + 1; j < poolEnd; j++ {
-			if len(allCandidateIDs) >= candidateBudget {
+		bucket := bucketInfos[i]
+		log.Printf("Scanning source bucket for counting: %s (%d)", bucket.key, bucket.size)
+
+		var cursor uint64
+		for {
+			members, newCursor, err := rc.client.SScan(ctx, bucket.key, cursor, "", sscanChunkSize).Result()
+			if err != nil {
+				log.Printf("WARN: SScan failed on bucket %s during counting: %v", bucket.key, err)
 				break
 			}
 
-			// To be efficient, we always scan the smaller bucket and check against the larger one.
-			bucketA := bucketInfos[i]
-			bucketB := bucketInfos[j]
-
-			smallerBucket := bucketA
-			largerBucket := bucketB
-			if bucketA.size > bucketB.size {
-				smallerBucket = bucketB
-				largerBucket = bucketA
+			for _, member := range members {
+				candidateCounts[member]++
 			}
 
-			log.Printf("Intersecting buckets for %s: %s (%d) and %s (%d)",
-				pratilipiID, smallerBucket.key, smallerBucket.size, largerBucket.key, largerBucket.size)
-
-			var cursor uint64
-			for {
-				members, newCursor, err := rc.client.SScan(ctx, smallerBucket.key, cursor, "", sscanChunkSize).Result()
-				if err != nil {
-					log.Printf("WARN: SScan failed on bucket %s during intersection: %v", smallerBucket.key, err)
-					break
-				}
-
-				if len(members) > 0 {
-					checkPipe := rc.client.Pipeline()
-					results := make([]*redis.BoolCmd, len(members))
-					for k, member := range members {
-						results[k] = checkPipe.SIsMember(ctx, largerBucket.key, member)
-					}
-					_, err := checkPipe.Exec(ctx)
-					if err != nil && err != redis.Nil {
-						log.Printf("WARN: SIsMember pipeline failed during intersection: %v", err)
-					}
-
-					for k, resCmd := range results {
-						isMember, _ := resCmd.Result()
-						if isMember {
-							allCandidateIDs[members[k]] = struct{}{} // Found in both! Add to candidates.
-						}
-					}
-				}
-
-				if newCursor == 0 || len(allCandidateIDs) >= candidateBudget {
-					break
-				}
-				cursor = newCursor
+			if newCursor == 0 {
+				break
 			}
+			cursor = newCursor
 		}
+	}
+
+	// We can prioritize candidates seen in more buckets.
+	type countedCandidate struct {
+		id    string
+		count int
+	}
+
+	sortedCandidates := make([]countedCandidate, 0, len(candidateCounts))
+	for id, count := range candidateCounts {
+		if count >= 2 { 
+			// Only consider candidates seen in at least 2 buckets, As we have the hamming distance of 3, 
+			// And we are picking up 5 smallest bands. If in worst case scenario, 
+			// we have all three bits destroy 3 of our bands, We can still have 2 bands with the same candidate.
+			sortedCandidates = append(sortedCandidates, countedCandidate{id, count})
+		}
+	}
+
+	sort.Slice(sortedCandidates, func(i, j int) bool {
+		return sortedCandidates[i].count > sortedCandidates[j].count
+	})
+
+	for _, cand := range sortedCandidates {
 		if len(allCandidateIDs) >= candidateBudget {
 			break
 		}
+		allCandidateIDs[cand.id] = struct{}{}
 	}
 
 	// Fallback for Extremely Large Buckets (if budget still remains)
