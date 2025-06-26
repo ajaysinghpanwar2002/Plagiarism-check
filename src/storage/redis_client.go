@@ -275,7 +275,7 @@ func (rc *RedisClient) CheckPotentialSimhashMatches(ctx context.Context, pratili
 	})
 
 	candidateBudget := 25000
-	if strings.ToLower(language) == "tamil" {
+	if strings.ToLower(language) == "tamil" || strings.ToLower(language) == "malayalam" {
 		candidateBudget = 10000
 	}
 
