@@ -1,10 +1,11 @@
 package simhash
 
 import (
-	"crypto/md5"
 	"fmt"
 	"math/bits"
 	"strings"
+
+	"github.com/cespare/xxhash/v2"
 )
 
 type Simhash struct {
@@ -28,15 +29,28 @@ func New(processedText string) Simhash {
 	var vec [128]int
 
 	for tok, w := range weights {
-		hash := md5.Sum([]byte(tok))
-		for byteIdx, b := range hash {
-			for bit := 0; bit < 8; bit++ {
-				idx := byteIdx*8 + bit
-				if (b>>bit)&1 == 1 {
-					vec[idx] += w
-				} else {
-					vec[idx] -= w
-				}
+		// NEW: Use xxhash.Sum64 for a much faster, non-cryptographic hash.
+		// We will generate two 64-bit hashes with different seeds to create a 128-bit fingerprint.
+		// This is a common and effective technique.
+		// Seed 0 for the lower 64 bits, Seed 1 for the higher 64 bits.
+		lowHash := xxhash.Sum64String(tok)
+		highHash := xxhash.Sum64String(tok + "1") // Add a salt for the second hash
+
+		// Process lower 64 bits
+		for i := 0; i < 64; i++ {
+			if (lowHash>>i)&1 == 1 {
+				vec[i] += w
+			} else {
+				vec[i] -= w
+			}
+		}
+
+		// Process higher 64 bits
+		for i := 0; i < 64; i++ {
+			if (highHash>>i)&1 == 1 {
+				vec[i+64] += w
+			} else {
+				vec[i+64] -= w
 			}
 		}
 	}
