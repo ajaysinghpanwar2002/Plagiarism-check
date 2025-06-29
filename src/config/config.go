@@ -27,6 +27,7 @@ type Config struct {
 	MossWindowSize          int
 	MossSimilarityThreshold float64
 	MinContentLength        int
+	PreprocessorServiceURL  string
 }
 
 func LoadConfig() (*Config, error) {
@@ -54,6 +55,7 @@ func LoadConfig() (*Config, error) {
 		MossWindowSize:          3,
 		MossSimilarityThreshold: 0.25,
 		MinContentLength:        500,
+		PreprocessorServiceURL:  os.Getenv("PREPROCESSOR_SERVICE_URL"),
 	}
 
 	if config.AthenaDatabase == "" || config.AthenaResultsBucket == "" ||

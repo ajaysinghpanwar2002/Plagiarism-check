@@ -4,7 +4,6 @@ import (
 	"crypto/md5"
 	"fmt"
 	"math/bits"
-	"regexp"
 	"strings"
 )
 
@@ -13,39 +12,17 @@ type Simhash struct {
 	High uint64
 }
 
-var unicodeWordRegex = regexp.MustCompile(`[\pL\p{Nd}]+`)
-
-func tokenizeUnicode(text string) []string {
-	lower := strings.ToLower(text)
-	words := unicodeWordRegex.FindAllString(lower, -1)
-	return words
-}
-
-func New(text string, language string) Simhash {
-	tokens := tokenizeUnicode(text)
+func New(processedText string) Simhash {
+	tokens := strings.Split(processedText, " ")
 	if len(tokens) == 0 {
 		return Simhash{Low: 0, High: 0}
 	}
 
-	stopWords := GetStopWordsMap(language)
-	filteredTokens := make([]string, 0, len(tokens))
-	if stopWords != nil {
-		for _, tok := range tokens {
-			if !stopWords[tok] {
-				filteredTokens = append(filteredTokens, tok)
-			}
+	weights := make(map[string]int, len(tokens))
+	for _, tok := range tokens {
+		if tok != "" {
+			weights[tok]++
 		}
-	} else {
-		filteredTokens = tokens
-	}
-
-	if len(filteredTokens) == 0 {
-		return Simhash{Low: 0, High: 0}
-	}
-
-	weights := make(map[string]int, len(filteredTokens))
-	for _, tok := range filteredTokens {
-		weights[tok]++
 	}
 
 	var vec [128]int

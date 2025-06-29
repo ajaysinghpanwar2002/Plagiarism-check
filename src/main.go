@@ -9,6 +9,7 @@ import (
 	"plagiarism-detector/src/config"
 	"plagiarism-detector/src/monitoring"
 	"plagiarism-detector/src/moss"
+	"plagiarism-detector/src/preprocessor"
 	"plagiarism-detector/src/simhash"
 	"plagiarism-detector/src/sources"
 	"plagiarism-detector/src/storage"
@@ -28,6 +29,8 @@ func main() {
 		log.Println("Unable to connect to grafana", err)
 	}
 	defer StatsDClient.Close()
+
+	preprocessorClient := preprocessor.NewClient(config.PreprocessorServiceURL, StatsDClient)
 
 	s3Downloader, err := sources.NewS3Downloader(ctx, config.AWSRegion, config.StoryS3Bucket, StatsDClient)
 	if err != nil {
@@ -81,7 +84,20 @@ func main() {
 					continue
 				}
 
-				hash := simhash.New(content, task.Language)
+				processedText, err := preprocessorClient.PreprocessText(ctx, content, task.Language)
+				if err != nil {
+					log.Printf("Worker %d: ERROR preprocessing text for Pratilipi ID %s: %v", workerID, task.ID, err)
+					monitoring.Increment("failed-preprocessing", StatsDClient)
+					continue
+				}
+
+				if processedText == "" {
+					log.Printf("Worker %d: Processed text is empty for Pratilipi ID %s", workerID, task.ID)
+					monitoring.Increment("empty-processed-text", StatsDClient)
+					continue
+				}
+
+				hash := simhash.New(processedText)
 
 				potentialMatchIDs, err := redisClient.CheckPotentialSimhashMatches(ctx, task.ID, task.Language, hash)
 				if err != nil {
